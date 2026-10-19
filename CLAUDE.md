@@ -25,7 +25,10 @@ A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
 Run from the repository root: fonts are loaded by relative path.
 
 - Desktop (Ion window, Windows): `msc build src/app/medic.ms --output=out/medic.exe`, then
-  `out/medic.exe <file>`.
+  `out/medic.exe <file>`. Add `--release` to open large files: building the document of a 100 MB
+  file took 0.25 s in release against 2.6 s in debug (2026-10-20).
+- Open cost: `msc run --release scripts/openBench.ms -- <megabytes>` times the document build, one
+  frame's line reads and one keystroke on generated text.
 - Web (`runCanvas`, `--os=emcc`): `sh scripts/buildWeb.sh [gl] [wgpu]` writes `out/web/`; serve
   that directory and open `index.html` (`?gl` / `?wgpu` force a backend).
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
