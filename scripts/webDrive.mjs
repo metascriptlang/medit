@@ -1,6 +1,7 @@
 // Drives the web build in headless Chrome over the DevTools protocol and saves screenshots.
 //   node scripts/webDrive.mjs <url> <outDir> <step>...
-// Steps: wait:<ms>  shot:<name>  wheel:<deltaY>  key:<key>  text:<text>  compose:<text>  commit:<text>
+// Steps: wait:<ms>  shot:<name>  wheel:<deltaY>  key:[ctrl+][alt+][shift+]<key>[*n]  type:<text> (keypresses)  text:<text> (insertText)
+//        compose:<text>  commit:<text>  click:<x>,<y>[,<count>][,alt|shift]  drag:<x1>,<y1>,<x2>,<y2>
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,6 +54,26 @@ function send(method, params = {}) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const VK = {
+	ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Backspace: 8, Tab: 9, Escape: 27,
+	Home: 36, End: 35, Delete: 46, PageUp: 33, PageDown: 34, Insert: 45,
+};
+const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
+
+function keyOf(chord) {
+	const parts = chord.split("+");
+	const key = parts.pop();
+	const modifiers = parts.reduce((m, p) => m | MOD_BITS[p], 0);
+	const letter = key.length === 1 && /[a-z]/i.test(key);
+	const code = letter ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : key;
+	const windowsVirtualKeyCode = letter ? key.toUpperCase().charCodeAt(0) : VK[key] ?? 0;
+	return { key, code, modifiers, windowsVirtualKeyCode };
+}
+
+async function mouse(type, x, y, modifiers, clickCount) {
+	await send("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, modifiers, clickCount });
+}
+
 await send("Runtime.enable");
 await send("Page.enable");
 await send("Emulation.setDeviceMetricsOverride", { width: 960, height: 640, deviceScaleFactor: 1, mobile: false });
@@ -74,9 +95,37 @@ for (const step of steps) {
 		await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 400, y: 300, deltaX: 0, deltaY: Number(arg) });
 		await sleep(100);
 	} else if (kind === "key") {
-		await send("Input.dispatchKeyEvent", { type: "keyDown", key: arg, code: arg });
-		await send("Input.dispatchKeyEvent", { type: "keyUp", key: arg, code: arg });
-		await sleep(50);
+		const [chord, times = "1"] = arg.split("*");
+		const k = keyOf(chord);
+		for (let i = 0; i < Number(times); i++) {
+			await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...k });
+			await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
+			await sleep(50);
+		}
+	} else if (kind === "click") {
+		const [x, y, count = "1", mod] = arg.split(",");
+		const modifiers = mod ? MOD_BITS[mod] : 0;
+		for (let c = 1; c <= Number(count); c++) {
+			await mouse("mousePressed", Number(x), Number(y), modifiers, c);
+			await mouse("mouseReleased", Number(x), Number(y), modifiers, c);
+		}
+		await sleep(100);
+	} else if (kind === "drag") {
+		const [x1, y1, x2, y2] = arg.split(",").map(Number);
+		await mouse("mousePressed", x1, y1, 0, 1);
+		await mouse("mouseMoved", (x1 + x2) / 2, (y1 + y2) / 2, 0, 0);
+		await mouse("mouseMoved", x2, y2, 0, 0);
+		await mouse("mouseReleased", x2, y2, 0, 1);
+		await sleep(100);
+	} else if (kind === "type") {
+		for (const ch of arg) {
+			const k = keyOf(ch);
+			const shifted = ch !== ch.toLowerCase();
+			const press = { ...k, key: ch, text: ch, unmodifiedText: ch, modifiers: shifted ? MOD_BITS.shift : 0 };
+			await send("Input.dispatchKeyEvent", { type: "keyDown", ...press });
+			await send("Input.dispatchKeyEvent", { type: "keyUp", ...press });
+			await sleep(20);
+		}
 	} else if (kind === "text") {
 		await send("Input.insertText", { text: arg });
 		await sleep(50);
