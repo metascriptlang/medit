@@ -1,6 +1,7 @@
 export struct Sel {
 	anchor: int32;
 	head: int32;
+	goal: int32 | null;
 }
 
 export struct Selections {
@@ -9,7 +10,11 @@ export struct Selections {
 }
 
 export function cursorAt(offset: int32): Sel {
-	return { anchor: offset, head: offset };
+	return { anchor: offset, head: offset, goal: null };
+}
+
+export function span(anchor: int32, head: int32): Sel {
+	return { anchor, head, goal: null };
 }
 
 export function start(this s: Sel): int32 { return Math.min(s.anchor, s.head); }
@@ -20,6 +25,14 @@ export function single(offset: int32): Selections {
 	return { ranges: [cursorAt(offset)], primary: 0 };
 }
 
+export function sameSelections(a: Selections, b: Selections): boolean {
+	if (a.ranges.length != b.ranges.length) { return false; }
+	for (let i = 0; i < a.ranges.length; i++) {
+		if (a.ranges[i].anchor != b.ranges[i].anchor || a.ranges[i].head != b.ranges[i].head) { return false; }
+	}
+	return true;
+}
+
 function overlaps(a: Sel, b: Sel): boolean {
 	return b.start() < a.end() || b.start() == a.start();
 }
@@ -27,7 +40,7 @@ function overlaps(a: Sel, b: Sel): boolean {
 function union(a: Sel, b: Sel): Sel {
 	const from = Math.min(a.start(), b.start());
 	const to = Math.max(a.end(), b.end());
-	return a.head < a.anchor ? { anchor: to, head: from } : { anchor: from, head: to };
+	return a.head < a.anchor ? span(to, from) : span(from, to);
 }
 
 export function normalized(s: Selections): Selections {
@@ -52,7 +65,7 @@ export function normalized(s: Selections): Selections {
 }
 
 test "a selection reads the same either way round" {
-	const s: Sel = { anchor: 9, head: 4 };
+	const s = span(9, 4);
 	assert s.start() == 4;
 	assert s.end() == 9;
 	assert !s.isEmpty();
@@ -67,7 +80,7 @@ test "cursors are sorted and duplicates merge" {
 }
 
 test "overlapping ranges merge and keep their direction" {
-	const n = normalized({ ranges: [{ anchor: 6, head: 2 }, { anchor: 4, head: 9 }], primary: 1 });
+	const n = normalized({ ranges: [span(6, 2), span(4, 9)], primary: 1 });
 	assert n.ranges.length == 1;
 	assert n.ranges[0].anchor == 9;
 	assert n.ranges[0].head == 2;
@@ -75,6 +88,6 @@ test "overlapping ranges merge and keep their direction" {
 }
 
 test "ranges that only touch stay apart" {
-	const n = normalized({ ranges: [{ anchor: 0, head: 3 }, { anchor: 3, head: 5 }], primary: 0 });
+	const n = normalized({ ranges: [span(0, 3), span(3, 5)], primary: 0 });
 	assert n.ranges.length == 2;
 }
