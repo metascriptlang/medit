@@ -1,10 +1,16 @@
-import { Document, Edit } from "./document";
-import { Sel, Selections, cursorAt, normalized, single } from "./selection";
+import { Bias, Change, Document, Edit, mapOffset } from "./document";
+import { Sel, Selections, cursorAt, normalized, sameSelections, single, span } from "./selection";
 
 export struct Step {
 	edits: Edit[];
 	before: Selections;
 	after: Selections;
+}
+
+export function mapThrough(offset: int32, changes: Change[], bias: Bias): int32 {
+	let at = offset;
+	for (const c of changes) { at = mapOffset(at, c, bias); }
+	return at;
 }
 
 export class Editor {
@@ -15,6 +21,8 @@ export class Editor {
 	private depth: int32;
 	private pending: Edit[];
 	private pendingBefore: Selections;
+	private group: string;
+	private lastGroup: string;
 
 	constructor(doc: Document) {
 		this.doc = doc;
@@ -24,6 +32,8 @@ export class Editor {
 		this.depth = 0;
 		this.pending = [];
 		this.pendingBefore = this.selections;
+		this.group = "";
+		this.lastGroup = "";
 	}
 
 	select(next: Selections): void {
@@ -39,36 +49,75 @@ export class Editor {
 		if (this.depth == 0) {
 			this.pending = [];
 			this.pendingBefore = this.selections;
+			this.group = "";
 		}
 		this.depth += 1;
+	}
+
+	groupAs(name: string): void {
+		if (this.depth == 0) { throw new Error("Editor.groupAs: no transaction is open"); }
+		this.group = name;
 	}
 
 	end(): void {
 		if (this.depth == 0) { throw new Error("Editor.end: no transaction is open"); }
 		this.depth -= 1;
 		if (this.depth > 0 || this.pending.length == 0) { return; }
-		this.undos.push({ edits: this.pending, before: this.pendingBefore, after: this.selections });
+		const last = this.undos.length - 1;
+		if (this.group != "" && this.group == this.lastGroup && last >= 0 &&
+			sameSelections(this.undos[last].after, this.pendingBefore)) {
+			const top = this.undos[last];
+			const edits = top.edits.slice(0, top.edits.length);
+			for (const e of this.pending) { edits.push(e); }
+			this.undos[last] = { edits, before: top.before, after: this.selections };
+		} else {
+			this.undos.push({ edits: this.pending, before: this.pendingBefore, after: this.selections });
+		}
+		this.lastGroup = this.group;
 		this.redos = [];
 	}
 
-	apply(edit: Edit): void {
-		if (this.depth == 0) { throw new Error("Editor.apply: an edit needs an open transaction"); }
-		this.pending.push(this.doc.splice(edit));
+	change(edits: Edit[]): Change[] {
+		if (this.depth == 0) { throw new Error("Editor.change: an edit needs an open transaction"); }
+		const applied: Change[] = [];
+		let delta = 0;
+		let lastTo = 0;
+		for (const e of edits) {
+			if (e.from < lastTo || e.from > e.to) {
+				throw new Error(`Editor.change: edit ${e.from}..${e.to} overlaps the one before or runs backwards`);
+			}
+			lastTo = e.to;
+			const from = e.from + delta;
+			const to = e.to + delta;
+			const inserted = e.text.length as int32;
+			this.pending.push(this.doc.splice({ from, to, text: e.text }));
+			applied.push({ from, removed: to - from, inserted });
+			delta += inserted - (to - from);
+		}
+		return applied;
+	}
+
+	replaceEach(texts: string[]): void {
+		if (texts.length != this.selections.ranges.length) {
+			throw new Error(`Editor.replaceEach: ${texts.length} texts for ${this.selections.ranges.length} selections`);
+		}
+		const edits: Edit[] = [];
+		for (let i = 0; i < texts.length; i++) {
+			const s = this.selections.ranges[i];
+			edits.push({ from: s.start(), to: s.end(), text: texts[i] });
+		}
+		this.begin();
+		const applied = this.change(edits);
+		const next: Sel[] = [];
+		for (const c of applied) { next.push(cursorAt(c.from + c.inserted)); }
+		this.selections = { ranges: next, primary: this.selections.primary };
+		this.end();
 	}
 
 	replaceSelections(text: string): void {
-		this.begin();
-		const next: Sel[] = [];
-		let delta = 0;
-		for (const s of this.selections.ranges) {
-			const from = s.start() + delta;
-			const to = s.end() + delta;
-			this.apply({ from, to, text });
-			next.push(cursorAt(from + (text.length as int32)));
-			delta += (text.length as int32) - (to - from);
-		}
-		this.selections = { ranges: next, primary: this.selections.primary };
-		this.end();
+		const texts: string[] = [];
+		for (const _s of this.selections.ranges) { texts.push(text); }
+		this.replaceEach(texts);
 	}
 
 	canUndo(): boolean { return this.undos.length > 0; }
@@ -80,6 +129,7 @@ export class Editor {
 		const step = this.undos.pop();
 		this.redos.push({ ...step, edits: this.replay(step.edits) });
 		this.selections = step.before;
+		this.lastGroup = "";
 		return true;
 	}
 
@@ -89,6 +139,7 @@ export class Editor {
 		const step = this.redos.pop();
 		this.undos.push({ ...step, edits: this.replay(step.edits) });
 		this.selections = step.after;
+		this.lastGroup = "";
 		return true;
 	}
 
@@ -107,6 +158,13 @@ function editorWith(text: string, cursors: int32[]): Editor {
 	return e;
 }
 
+function typed(e: Editor, text: string): void {
+	e.begin();
+	e.groupAs("type");
+	e.replaceSelections(text);
+	e.end();
+}
+
 test "typing at several cursors inserts at each and moves each cursor" {
 	const e = editorWith("ab\ncd\nef", [1, 4, 7]);
 	e.replaceSelections("X");
@@ -118,7 +176,7 @@ test "typing at several cursors inserts at each and moves each cursor" {
 
 test "typing over selections replaces each range" {
 	const e = editorWith("one two three", [0]);
-	e.select({ ranges: [{ anchor: 0, head: 3 }, { anchor: 8, head: 13 }], primary: 0 });
+	e.select({ ranges: [span(0, 3), span(8, 13)], primary: 0 });
 	e.replaceSelections("1");
 	assert e.doc.text() == "1 two 1";
 	assert e.selections.ranges[1].head == 7;
@@ -165,6 +223,31 @@ test "nested transactions make one step" {
 test "an edit outside a transaction is refused" {
 	const e = editorWith("abc", [0]);
 	let refused = false;
-	try { e.apply({ from: 0, to: 1, text: "" }); } catch (err) { refused = true; }
+	try { const _c = e.change([{ from: 0, to: 1, text: "" }]); } catch (err) { refused = true; }
 	assert refused;
+}
+
+test "typing in one place coalesces into one step until the cursor moves" {
+	const e = editorWith("", [0]);
+	typed(e, "a");
+	typed(e, "b");
+	typed(e, "c");
+	e.select(single(1));
+	typed(e, "X");
+	assert e.doc.text() == "aXbc";
+	assert e.undo();
+	assert e.doc.text() == "abc";
+	assert e.undo();
+	assert e.doc.text() == "";
+	assert e.selections.ranges[0].head == 0;
+}
+
+test "edits at several places shift by what came before" {
+	const e = editorWith("0123456789", [0]);
+	e.begin();
+	const applied = e.change([{ from: 1, to: 3, text: "" }, { from: 5, to: 5, text: "abc" }, { from: 8, to: 9, text: "Z" }]);
+	e.end();
+	assert e.doc.text() == "034abc567Z9";
+	assert applied[1].from == 3;
+	assert mapThrough(9, applied, Bias.Left) == 10;
 }
