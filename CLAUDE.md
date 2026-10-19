@@ -5,9 +5,9 @@ A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
 
 ## Layers
 
-- `src/text`, `src/model`, `src/view/viewport.ms` are headless: they import nothing from Neon,
-  Void or Ion, so the core runs and tests on every target and a vim layer, LSP or remote host can
-  drive it later. Only `src/app` touches Neon.
+- `src/text`, `src/model`, `src/input`, `src/view/viewport.ms` are headless: they import nothing
+  from Neon, Void or Ion, so the core runs and tests on every target and a vim layer, LSP or remote
+  host can drive it later. Only `src/app` touches Neon.
 - Every document change goes through one choke point (the document's splice), which returns the
   inverse edit, bumps the version and maps anchors and selections. Undo, the edit log and later
   LSP sync hang off it; a second write path desynchronises all three.
@@ -23,7 +23,8 @@ Run from the repository root: fonts are loaded by relative path.
   `out/medic.exe <file>`.
 - Web (`runCanvas`, `--os=emcc`): `sh scripts/buildWeb.sh [gl] [wgpu]` writes `out/web/`; serve
   that directory and open `index.html` (`?gl` / `?wgpu` force a backend).
-- Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...`.
+- Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
+  header). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
 
 ## Gate
 
