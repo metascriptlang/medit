@@ -25,6 +25,12 @@ export function resized(this v: Viewport, rows: int32, lineCount: int32): Viewpo
 	return sized.scrolledBy(0, lineCount);
 }
 
+export function revealed(this v: Viewport, line: int32, lineCount: int32): Viewport {
+	if (line < v.top) { return v.scrolledBy(line - v.top, lineCount); }
+	if (line >= v.top + v.rows) { return v.scrolledBy(line - (v.top + v.rows - 1), lineCount); }
+	return v;
+}
+
 function at(top: int32, rows: int32): Viewport {
 	return { top, rows, pending: 0 };
 }
@@ -55,4 +61,10 @@ test "fractional notches accumulate until they reach a row" {
 
 test "shrinking the document while resized pulls the top back" {
 	assert at(50, 10).resized(20, 30).top == 29;
+}
+
+test "revealing a line scrolls only as far as it takes" {
+	assert at(10, 5).revealed(12, 100).top == 10;
+	assert at(10, 5).revealed(3, 100).top == 3;
+	assert at(10, 5).revealed(20, 100).top == 16;
 }
