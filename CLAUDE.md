@@ -28,5 +28,6 @@ Run from the repository root: fonts are loaded by relative path.
 
 ## Gate
 
-`msc test` on every file under `src/` that holds tests, then both builds above. WebGPU has no
+`sh scripts/gate.sh`: `msc test` on every file under `src/` that holds tests, then both builds
+above; a land runs it with `wt.sh land --gate 'sh scripts/gate.sh'`. WebGPU has no
 adapter in headless Chrome on this machine, so it builds but renders only in a headed browser.
