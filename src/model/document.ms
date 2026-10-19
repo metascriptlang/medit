@@ -61,7 +61,7 @@ export class Document {
 	lineEnd(line: int32): int32 { return this.rope.lineEnd(line); }
 	lineOf(offset: int32): int32 { return this.rope.lineOf(offset); }
 	slice(from: int32, to: int32): string { return this.rope.slice(from, to); }
-	codeAt(offset: int32): int32 { return this.rope.codeAt(offset); }
+	byteAt(offset: int32): int32 { return this.rope.byteAt(offset); }
 	text(): string { return this.rope.text(); }
 
 	splice(edit: Edit): Edit {
@@ -70,7 +70,7 @@ export class Document {
 		const change: Change = {
 			from: edit.from,
 			removed: edit.to - edit.from,
-			inserted: edit.text.length as int32,
+			inserted: edit.text.byteLength,
 		};
 		this.current += 1;
 		if ((this.log.length as int32) == LOG_SIZE) { this.log.shift(); }

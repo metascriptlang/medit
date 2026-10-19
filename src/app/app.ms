@@ -53,7 +53,7 @@ function fill<T>(list: List<T>, items: T[]): void {
 }
 
 export function App(text: string, clip: Clip, fail: (message: string) => void): NeonNode {
-	const editor = new Editor(new Document(text.split("\r\n").join("\n")));
+	const editor = new Editor(new Document(text));
 	const doc = editor.doc;
 	const table = commands();
 	const keymap = defaultKeymap();

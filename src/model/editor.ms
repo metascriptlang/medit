@@ -89,7 +89,7 @@ export class Editor {
 			lastTo = e.to;
 			const from = e.from + delta;
 			const to = e.to + delta;
-			const inserted = e.text.length as int32;
+			const inserted = e.text.byteLength;
 			this.pending.push(this.doc.splice({ from, to, text: e.text }));
 			applied.push({ from, removed: to - from, inserted });
 			delta += inserted - (to - from);

@@ -2,7 +2,7 @@ import { Document } from "./document";
 
 const NEWLINE: int32 = 10;
 const ZWJ: int32 = 0x200D;
-const CLUSTER_LOOKBACK: int32 = 32;
+const CLUSTER_LOOKBACK: int32 = 64;
 
 enum CharClass {
 	Space,
@@ -11,19 +11,22 @@ enum CharClass {
 	Punct,
 }
 
-function isHigh(code: int32): boolean { return code >= 0xD800 && code <= 0xDBFF; }
-function isLow(code: int32): boolean { return code >= 0xDC00 && code <= 0xDFFF; }
+function isTrail(b: int32): boolean { return (b & 0xC0) == 0x80; }
 
-function codePointAt(doc: Document, at: int32): int32 {
-	const code = doc.codeAt(at);
-	if (isHigh(code) && at + 1 < doc.length()) {
-		const low = doc.codeAt(at + 1);
-		if (isLow(low)) { return 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00); }
-	}
-	return code;
+function stepAt(doc: Document, at: int32): int32 {
+	const lead = doc.byteAt(at);
+	const n = lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+	return Math.min(n, doc.length() - at);
 }
 
-function unitsOf(cp: int32): int32 { return cp >= 0x10000 ? 2 : 1; }
+function codePointAt(doc: Document, at: int32): int32 {
+	const lead = doc.byteAt(at);
+	const n = stepAt(doc, at);
+	if (n == 1) { return lead; }
+	let cp = lead & (n == 2 ? 0x1F : n == 3 ? 0x0F : 0x07);
+	for (let k = 1; k < n; k++) { cp = (cp << 6) | (doc.byteAt(at + k) & 0x3F); }
+	return cp;
+}
 
 // Not full UAX #29: Hangul jamo, Indic conjuncts and regional-indicator flags split; widen this when one of them is typed.
 function continuesCluster(cp: int32): boolean {
@@ -40,14 +43,14 @@ function continuesCluster(cp: int32): boolean {
 export function nextCluster(doc: Document, offset: int32): int32 {
 	const total = doc.length();
 	if (offset >= total) { return total; }
-	let at = offset + unitsOf(codePointAt(doc, offset));
+	let at = offset + stepAt(doc, offset);
 	while (at < total) {
 		const cp = codePointAt(doc, at);
 		if (cp == ZWJ) {
-			at += 1;
-			if (at < total) { at += unitsOf(codePointAt(doc, at)); }
+			at += stepAt(doc, at);
+			if (at < total) { at += stepAt(doc, at); }
 		} else if (continuesCluster(cp)) {
-			at += unitsOf(cp);
+			at += stepAt(doc, at);
 		} else {
 			break;
 		}
@@ -57,7 +60,7 @@ export function nextCluster(doc: Document, offset: int32): int32 {
 
 export function prevCluster(doc: Document, offset: int32): int32 {
 	if (offset <= 0) { return 0; }
-	if (doc.codeAt(offset - 1) == NEWLINE) { return offset - 1; }
+	if (doc.byteAt(offset - 1) == NEWLINE) { return offset - 1; }
 	const lineStart = doc.lineStart(doc.lineOf(offset));
 	let from = Math.max(lineStart, offset - CLUSTER_LOOKBACK);
 	while (from > lineStart && !startsCluster(doc, from)) { from -= 1; }
@@ -71,9 +74,13 @@ export function prevCluster(doc: Document, offset: int32): int32 {
 }
 
 function startsCluster(doc: Document, at: int32): boolean {
-	const code = doc.codeAt(at);
-	if (isLow(code) || code == ZWJ || continuesCluster(codePointAt(doc, at))) { return false; }
-	return at == 0 || doc.codeAt(at - 1) != ZWJ;
+	if (isTrail(doc.byteAt(at))) { return false; }
+	const cp = codePointAt(doc, at);
+	if (cp == ZWJ || continuesCluster(cp)) { return false; }
+	if (at == 0) { return true; }
+	let prev = at - 1;
+	while (prev > 0 && isTrail(doc.byteAt(prev))) { prev -= 1; }
+	return codePointAt(doc, prev) != ZWJ;
 }
 
 function classOf(code: int32): CharClass {
@@ -86,33 +93,33 @@ function classOf(code: int32): CharClass {
 export function wordRight(doc: Document, offset: int32): int32 {
 	const total = doc.length();
 	let at = offset;
-	if (at < total && classOf(doc.codeAt(at)) == CharClass.Newline) { return at + 1; }
-	while (at < total && classOf(doc.codeAt(at)) == CharClass.Space) { at += 1; }
-	if (at >= total || classOf(doc.codeAt(at)) == CharClass.Newline) { return at; }
-	const run = classOf(doc.codeAt(at));
-	while (at < total && classOf(doc.codeAt(at)) == run) { at += 1; }
+	if (at < total && classOf(doc.byteAt(at)) == CharClass.Newline) { return at + 1; }
+	while (at < total && classOf(doc.byteAt(at)) == CharClass.Space) { at += 1; }
+	if (at >= total || classOf(doc.byteAt(at)) == CharClass.Newline) { return at; }
+	const run = classOf(doc.byteAt(at));
+	while (at < total && classOf(doc.byteAt(at)) == run) { at += 1; }
 	return at;
 }
 
 export function wordLeft(doc: Document, offset: int32): int32 {
 	let at = offset;
-	if (at > 0 && classOf(doc.codeAt(at - 1)) == CharClass.Newline) { return at - 1; }
-	while (at > 0 && classOf(doc.codeAt(at - 1)) == CharClass.Space) { at -= 1; }
-	if (at <= 0 || classOf(doc.codeAt(at - 1)) == CharClass.Newline) { return at; }
-	const run = classOf(doc.codeAt(at - 1));
-	while (at > 0 && classOf(doc.codeAt(at - 1)) == run) { at -= 1; }
+	if (at > 0 && classOf(doc.byteAt(at - 1)) == CharClass.Newline) { return at - 1; }
+	while (at > 0 && classOf(doc.byteAt(at - 1)) == CharClass.Space) { at -= 1; }
+	if (at <= 0 || classOf(doc.byteAt(at - 1)) == CharClass.Newline) { return at; }
+	const run = classOf(doc.byteAt(at - 1));
+	while (at > 0 && classOf(doc.byteAt(at - 1)) == run) { at -= 1; }
 	return at;
 }
 
 export function wordAt(doc: Document, offset: int32): int32[] {
 	const total = doc.length();
-	const probe = offset < total && classOf(doc.codeAt(offset)) != CharClass.Newline ? offset : offset - 1;
-	if (probe < 0 || classOf(doc.codeAt(probe)) == CharClass.Newline) { return [offset, offset]; }
-	const run = classOf(doc.codeAt(probe));
+	const probe = offset < total && classOf(doc.byteAt(offset)) != CharClass.Newline ? offset : offset - 1;
+	if (probe < 0 || classOf(doc.byteAt(probe)) == CharClass.Newline) { return [offset, offset]; }
+	const run = classOf(doc.byteAt(probe));
 	let from = probe;
 	let to = probe + 1;
-	while (from > 0 && classOf(doc.codeAt(from - 1)) == run) { from -= 1; }
-	while (to < total && classOf(doc.codeAt(to)) == run) { to += 1; }
+	while (from > 0 && classOf(doc.byteAt(from - 1)) == run) { from -= 1; }
+	while (to < total && classOf(doc.byteAt(to)) == run) { to += 1; }
 	return [from, to];
 }
 
@@ -136,7 +143,7 @@ export function offsetAtColumn(doc: Document, line: int32, column: int32): int32
 export function indentEnd(doc: Document, line: int32): int32 {
 	const end = doc.lineEnd(line);
 	let at = doc.lineStart(line);
-	while (at < end && classOf(doc.codeAt(at)) == CharClass.Space) { at += 1; }
+	while (at < end && classOf(doc.byteAt(at)) == CharClass.Space) { at += 1; }
 	return at;
 }
 
@@ -149,16 +156,16 @@ export function smartHome(doc: Document, offset: int32): int32 {
 test "a cluster holds a surrogate pair, its combining marks and a ZWJ sequence" {
 	const d = new Document("a😀é👩‍💻👍🏽x");
 	assert nextCluster(d, 0) == 1;
-	assert nextCluster(d, 1) == 3;
-	assert nextCluster(d, 3) == 5;
-	assert nextCluster(d, 5) == 10;
-	assert nextCluster(d, 10) == 14;
-	assert nextCluster(d, 14) == 15;
-	assert prevCluster(d, 15) == 14;
-	assert prevCluster(d, 14) == 10;
-	assert prevCluster(d, 10) == 5;
-	assert prevCluster(d, 5) == 3;
-	assert prevCluster(d, 3) == 1;
+	assert nextCluster(d, 1) == 5;
+	assert nextCluster(d, 5) == 8;
+	assert nextCluster(d, 8) == 19;
+	assert nextCluster(d, 19) == 27;
+	assert nextCluster(d, 27) == 28;
+	assert prevCluster(d, 28) == 27;
+	assert prevCluster(d, 27) == 19;
+	assert prevCluster(d, 19) == 8;
+	assert prevCluster(d, 8) == 5;
+	assert prevCluster(d, 5) == 1;
 }
 
 test "a newline is its own cluster and ends the line's clusters" {
@@ -168,12 +175,12 @@ test "a newline is its own cluster and ends the line's clusters" {
 	assert prevCluster(d, 4) == 3;
 }
 
-test "a precomposed Vietnamese letter is one unit, a decomposed one is one cluster" {
+test "a precomposed Vietnamese letter is one code point, a decomposed one is one cluster" {
 	const d = new Document("tiếng tiếng");
-	assert nextCluster(d, 2) == 3;
-	assert columnOf(d, 5) == 5;
-	assert nextCluster(d, 8) == 11;
-	assert columnOf(d, 13) == 11;
+	assert nextCluster(d, 2) == 5;
+	assert columnOf(d, 7) == 5;
+	assert nextCluster(d, 10) == 15;
+	assert columnOf(d, 17) == 11;
 }
 
 test "word motion stops at word, punctuation and line edges" {
@@ -183,8 +190,8 @@ test "word motion stops at word, punctuation and line edges" {
 	assert wordRight(d, 9) == 11;
 	assert wordRight(d, 11) == 12;
 	assert wordRight(d, 16) == 17;
-	assert wordRight(d, 17) == 24;
-	assert wordLeft(d, 24) == 19;
+	assert wordRight(d, 17) == 26;
+	assert wordLeft(d, 26) == 19;
 	assert wordLeft(d, 19) == 17;
 	assert wordLeft(d, 17) == 16;
 	assert wordLeft(d, 16) == 15;
@@ -202,9 +209,9 @@ test "the word at an offset" {
 
 test "columns count clusters and clamp at the line end" {
 	const d = new Document("a😀b\nxy");
-	assert columnOf(d, 3) == 2;
-	assert offsetAtColumn(d, 0, 2) == 3;
-	assert offsetAtColumn(d, 1, 9) == 7;
+	assert columnOf(d, 5) == 2;
+	assert offsetAtColumn(d, 0, 2) == 5;
+	assert offsetAtColumn(d, 1, 9) == 9;
 }
 
 test "home goes to the indent, then to the line start" {

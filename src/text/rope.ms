@@ -1,84 +1,237 @@
-export const CHUNK_MAX: int32 = 1024;
-const CHUNK_MIN: int32 = 256;
+export const LEAF_MAX: int32 = 2048;
+const LEAF_MIN: int32 = LEAF_MAX / 2;
+const SPLIT_SLACK: int32 = 4;
+export const BRANCH_MAX: int32 = 12;
+const BRANCH_MIN: int32 = BRANCH_MAX / 2;
 const NEWLINE: int32 = 10;
+const RETURN: int32 = 13;
 
-struct Chunk {
+// A branch keeps its children's sizes beside them, so a descent reads one array per level instead of every child.
+class Node {
 	text: string;
-	units: int32;
+	children: Node[];
+	sizes: int32[];
+	lines: int32[];
+	bytes: int32;
 	breaks: int32;
-}
+	height: int32;
 
-function isHighSurrogate(code: int32): boolean {
-	return code >= 0xD800 && code <= 0xDBFF;
+	constructor(text: string, children: Node[], sizes: int32[], lines: int32[], bytes: int32, breaks: int32, height: int32) {
+		this.text = text;
+		this.children = children;
+		this.sizes = sizes;
+		this.lines = lines;
+		this.bytes = bytes;
+		this.breaks = breaks;
+		this.height = height;
+	}
 }
 
 function breaksIn(text: string): int32 {
+	const bytes = text.asBytes();
 	let count = 0;
-	let at = text.indexOf("\n");
-	while (at >= 0) {
-		count += 1;
-		at = text.indexOf("\n", at + 1);
+	for (let i = 0; i < bytes.length; i++) {
+		if (bytes[i] == NEWLINE) { count += 1; }
 	}
 	return count;
 }
 
-function chunkOf(text: string): Chunk {
-	return { text, units: text.length as int32, breaks: breaksIn(text) };
+function leafOf(text: string): Node {
+	return new Node(text, [], [], [], text.byteLength, breaksIn(text), 0);
 }
 
-function piecesOf(text: string): Chunk[] {
-	const pieces: Chunk[] = [];
-	const total = text.length as int32;
+function branchOf(children: Node[]): Node {
+	const sizes: int32[] = [];
+	const lines: int32[] = [];
+	let bytes = 0;
+	let breaks = 0;
+	for (let i = 0; i < children.length; i++) {
+		const c = children[i];
+		sizes.push(c.bytes);
+		lines.push(c.breaks);
+		bytes += c.bytes;
+		breaks += c.breaks;
+	}
+	return new Node("", children, sizes, lines, bytes, breaks, children[0].height + 1);
+}
+
+function isContinuation(text: string, at: int32): boolean {
+	return (text.byteAt(at) & 0xC0) == 0x80;
+}
+
+function leafFrom(bytes: Readonly<Span<uint8>>, from: int32, to: int32, crlf: boolean): Node {
+	const out: uint8[] = [];
+	let breaks = 0;
+	for (let i = from; i < to; i++) {
+		const b = bytes[i];
+		if (b == NEWLINE) { breaks += 1; }
+		if (!(crlf && b == RETURN && i + 1 < to && bytes[i + 1] == NEWLINE)) { out.push(b); }
+	}
+	return new Node(out.asString(), [], [], [], out.length as int32, breaks, 0);
+}
+
+function pushLeaves(text: string, crlf: boolean, out: Node[]): void {
+	const total = text.byteLength;
+	if (total == 0) { return; }
+	if (total <= LEAF_MAX && !crlf) {
+		out.push(leafOf(text));
+		return;
+	}
+	const bytes = text.asBytes();
+	const count = (total + LEAF_MAX - SPLIT_SLACK - 1) / (LEAF_MAX - SPLIT_SLACK);
+	const base = total / count;
+	const extra = total % count;
+	let target = 0;
+	let at = 0;
+	for (let k = 1; k <= count; k++) {
+		target += base + (k <= extra ? 1 : 0);
+		let end = target;
+		while (end > at && end < total && (bytes[end] & 0xC0) == 0x80) { end -= 1; }
+		if (crlf && end > at && end < total && bytes[end - 1] == RETURN) { end -= 1; }
+		if (end == at) { continue; }
+		out.push(leafFrom(bytes, at, end, crlf));
+		at = end;
+	}
+}
+
+function grouped(nodes: Node[]): Node[] {
+	const count = nodes.length as int32;
+	const parents = (count + BRANCH_MAX - 1) / BRANCH_MAX;
+	const out: Node[] = [];
+	let at = 0;
+	for (let k = 1; k <= parents; k++) {
+		const end = at + count / parents + (k <= count % parents ? 1 : 0);
+		out.push(branchOf(nodes.slice(at, end)));
+		at = end;
+	}
+	return out;
+}
+
+function underfull(n: Node): boolean {
+	return n.height == 0 ? n.bytes < LEAF_MIN : (n.children.length as int32) < BRANCH_MIN;
+}
+
+function merged(a: Node, b: Node): Node[] {
+	if (a.height > 0) { return grouped(rebalanced(a.children.concat(b.children))); }
+	const out: Node[] = [];
+	pushLeaves(a.text + b.text, false, out);
+	return out;
+}
+
+function rebalanced(nodes: Node[]): Node[] {
+	const out: Node[] = [];
+	for (let k = 0; k < nodes.length; k++) {
+		const n = nodes[k];
+		const last = out.length - 1;
+		if (last >= 0 && (underfull(n) || underfull(out[last]))) {
+			const prev = out.pop() as Node;
+			const both = merged(prev, n);
+			for (let m = 0; m < both.length; m++) { out.push(both[m]); }
+		} else {
+			out.push(n);
+		}
+	}
+	return out;
+}
+
+function pushAll(out: Node[], nodes: Node[]): void {
+	for (let k = 0; k < nodes.length; k++) { out.push(nodes[k]); }
+}
+
+function replaced(node: Node, from: int32, to: int32, text: string): Node[] {
+	if (node.height == 0) {
+		const body = node.text;
+		const out: Node[] = [];
+		pushLeaves(body.byteSlice(0, from) + text + body.byteSlice(to, node.bytes), false, out);
+		return out;
+	}
+	const kids = node.children;
+	const sizes = node.sizes;
+	let i = 0;
 	let start = 0;
-	while (start < total) {
-		let end = Math.min(start + CHUNK_MAX, total);
-		if (end < total && isHighSurrogate(text.charCodeAt(end - 1))) { end -= 1; }
-		pieces.push(chunkOf(text.slice(start, end)));
+	while (i + 1 < sizes.length && from > start + sizes[i]) {
+		start += sizes[i];
+		i += 1;
+	}
+	let j = i;
+	let startJ = start;
+	while (j + 1 < sizes.length && to > startJ + sizes[j]) {
+		startJ += sizes[j];
+		j += 1;
+	}
+	const out: Node[] = kids.slice(0, i);
+	if (i == j) {
+		pushAll(out, replaced(kids[i], from - start, to - start, text));
+	} else {
+		pushAll(out, replaced(kids[i], from - start, sizes[i], text));
+		pushAll(out, replaced(kids[j], 0, to - startJ, ""));
+	}
+	for (let k = j + 1; k < kids.length; k++) { out.push(kids[k]); }
+	return grouped(rebalanced(out));
+}
+
+function rootOf(nodes: Node[]): Node {
+	if (nodes.length == 0) { return leafOf(""); }
+	let level = nodes;
+	while (level.length > 1) { level = grouped(level); }
+	let root = level[0];
+	while (root.height > 0 && root.children.length == 1) { root = root.children[0]; }
+	return root;
+}
+
+function collect(node: Node, from: int32, to: int32, out: string[]): void {
+	if (node.height == 0) {
+		out.push(from == 0 && to == node.bytes ? node.text : node.text.byteSlice(from, to));
+		return;
+	}
+	let start = 0;
+	for (let k = 0; k < node.sizes.length; k++) {
+		const end = start + node.sizes[k];
+		if (end > from && start < to) {
+			collect(node.children[k], Math.max(from, start) - start, Math.min(to, end) - start, out);
+		}
+		if (end >= to) { return; }
 		start = end;
 	}
-	return pieces;
 }
 
+// Persistent: an edit builds new nodes along its path and shares the rest, so a kept root is a snapshot.
 export class Rope {
-	private chunks: Chunk[];
-	private unitsBefore: int32[];
-	private breaksBefore: int32[];
-	private clean: int32;
+	private root: Node;
 
 	constructor(text: string) {
-		this.chunks = piecesOf(text);
-		if (this.chunks.length == 0) { this.chunks.push(chunkOf("")); }
-		this.unitsBefore = [0];
-		this.breaksBefore = [0];
-		this.clean = 0;
+		const leaves: Node[] = [];
+		pushLeaves(text, true, leaves);
+		this.root = rootOf(leaves);
 	}
 
-	length(): int32 {
-		this.summarize();
-		return this.unitsBefore[this.chunks.length];
-	}
+	length(): int32 { return this.root.bytes; }
+	lineCount(): int32 { return this.root.breaks + 1; }
+	height(): int32 { return this.root.height; }
 
-	lineCount(): int32 {
-		this.summarize();
-		return this.breaksBefore[this.chunks.length] + 1;
-	}
-
-	text(): string {
-		let all = "";
-		for (const c of this.chunks) { all += c.text; }
-		return all;
-	}
+	text(): string { return this.slice(0, this.length()); }
 
 	slice(from: int32, to: int32): string {
 		this.check(from, to, "slice");
-		if (from == to) { return ""; }
-		const a = this.chunkAt(from);
-		const b = this.chunkAt(to);
-		const fromInA = from - this.unitsBefore[a];
-		if (a == b) { return this.chunks[a].text.slice(fromInA, to - this.unitsBefore[a]); }
-		let out = this.chunks[a].text.slice(fromInA);
-		for (let i = a + 1; i < b; i++) { out += this.chunks[i].text; }
-		return out + this.chunks[b].text.slice(0, to - this.unitsBefore[b]);
+		const out: string[] = [];
+		collect(this.root, from, to, out);
+		return out.length == 1 ? out[0] : out.join("");
+	}
+
+	byteAt(offset: int32): int32 {
+		this.check(offset, offset + 1, "byteAt");
+		let node = this.root;
+		let at = offset;
+		while (node.height > 0) {
+			const sizes = node.sizes;
+			let i = 0;
+			while (at >= sizes[i]) {
+				at -= sizes[i];
+				i += 1;
+			}
+			node = node.children[i];
+		}
+		return node.text.byteAt(at);
 	}
 
 	lineStart(line: int32): int32 {
@@ -87,11 +240,22 @@ export class Rope {
 			throw new Error(`Rope.lineStart: line ${line} is outside 0..${lines - 1}`);
 		}
 		if (line == 0) { return 0; }
-		const i = this.chunkHoldingBreak(line);
-		const text = this.chunks[i].text;
+		let node = this.root;
+		let left = line;
+		let offset = 0;
+		while (node.height > 0) {
+			const breaks = node.lines;
+			let i = 0;
+			while (left > breaks[i]) {
+				left -= breaks[i];
+				offset += node.sizes[i];
+				i += 1;
+			}
+			node = node.children[i];
+		}
 		let at = -1;
-		for (let k = this.breaksBefore[i]; k < line; k++) { at = text.indexOf("\n", at + 1); }
-		return this.unitsBefore[i] + at + 1;
+		for (let k = 0; k < left; k++) { at = node.text.byteIndexOf("\n", at + 1); }
+		return offset + at + 1;
 	}
 
 	lineEnd(line: int32): int32 {
@@ -104,67 +268,30 @@ export class Rope {
 
 	lineOf(offset: int32): int32 {
 		this.check(offset, offset, "lineOf");
-		const i = this.chunkAt(offset);
-		const text = this.chunks[i].text;
-		const inChunk = offset - this.unitsBefore[i];
-		let line = this.breaksBefore[i];
-		let at = text.indexOf("\n");
-		while (at >= 0 && at < inChunk) {
+		let node = this.root;
+		let at = offset;
+		let line = 0;
+		while (node.height > 0) {
+			const sizes = node.sizes;
+			let i = 0;
+			while (i + 1 < sizes.length && at >= sizes[i]) {
+				at -= sizes[i];
+				line += node.lines[i];
+				i += 1;
+			}
+			node = node.children[i];
+		}
+		let found = node.text.byteIndexOf("\n");
+		while (found >= 0 && found < at) {
 			line += 1;
-			at = text.indexOf("\n", at + 1);
+			found = node.text.byteIndexOf("\n", found + 1);
 		}
 		return line;
 	}
 
-	codeAt(offset: int32): int32 {
-		this.check(offset, offset + 1, "codeAt");
-		const i = this.chunkAt(offset);
-		return this.chunks[i].text.charCodeAt(offset - this.unitsBefore[i]);
-	}
-
 	replace(from: int32, to: int32, text: string): void {
 		this.check(from, to, "replace");
-		let a = this.chunkAt(from);
-		let b = this.chunkAt(to);
-		let merged = this.chunks[a].text.slice(0, from - this.unitsBefore[a]) +
-			text +
-			this.chunks[b].text.slice(to - this.unitsBefore[b]);
-		if ((merged.length as int32) < CHUNK_MIN && b + 1 < this.chunks.length) {
-			b += 1;
-			merged += this.chunks[b].text;
-		}
-		if ((merged.length as int32) < CHUNK_MIN && a > 0) {
-			a -= 1;
-			merged = this.chunks[a].text + merged;
-		}
-		const pieces = piecesOf(merged);
-		if (pieces.length == 0 && a == 0 && b + 1 == this.chunks.length) { pieces.push(chunkOf("")); }
-		this.insertChunks(a, b + 1, pieces);
-		this.clean = Math.min(this.clean, a);
-	}
-
-	private insertChunks(from: int32, to: int32, pieces: Chunk[]): void {
-		const next: Chunk[] = [];
-		for (let i = 0; i < from; i++) { next.push(this.chunks[i]); }
-		for (const p of pieces) { next.push(p); }
-		for (let i = to; i < this.chunks.length; i++) { next.push(this.chunks[i]); }
-		this.chunks = next;
-	}
-
-	chunkCount(): int32 {
-		return this.chunks.length as int32;
-	}
-
-	private summarize(): void {
-		const n = this.chunks.length as int32;
-		if (this.clean >= n && this.unitsBefore.length == n + 1) { return; }
-		this.unitsBefore.setLength(n + 1);
-		this.breaksBefore.setLength(n + 1);
-		for (let i = this.clean; i < n; i++) {
-			this.unitsBefore[i + 1] = this.unitsBefore[i] + this.chunks[i].units;
-			this.breaksBefore[i + 1] = this.breaksBefore[i] + this.chunks[i].breaks;
-		}
-		this.clean = n;
+		this.root = rootOf(replaced(this.root, from, to, text));
 	}
 
 	private check(from: int32, to: int32, who: string): void {
@@ -172,26 +299,6 @@ export class Rope {
 		if (from < 0 || from > to || to > total) {
 			throw new Error(`Rope.${who}: range ${from}..${to} is outside 0..${total}`);
 		}
-	}
-
-	private chunkAt(offset: int32): int32 {
-		let low = 0;
-		let high = (this.chunks.length as int32) - 1;
-		while (low < high) {
-			const mid = (low + high + 1) / 2;
-			if (this.unitsBefore[mid] <= offset) { low = mid; } else { high = mid - 1; }
-		}
-		return low;
-	}
-
-	private chunkHoldingBreak(line: int32): int32 {
-		let low = 0;
-		let high = (this.chunks.length as int32) - 1;
-		while (low < high) {
-			const mid = (low + high) / 2;
-			if (this.breaksBefore[mid + 1] >= line) { high = mid; } else { low = mid + 1; }
-		}
-		return low;
 	}
 }
 
@@ -203,15 +310,24 @@ function nextSeed(seed: uint32): uint32 {
 	return x;
 }
 
-function sampleText(seed: uint32, units: int32): string {
+function sampleText(seed: uint32, bytes: int32): string {
 	const alphabet = ["a", "b", " ", "\n", "é", "😀", "xyz", "\n\n", "tiếng"];
-	let out = "";
+	const parts: string[] = [];
+	let size = 0;
 	let s = seed;
-	while ((out.length as int32) < units) {
+	while (size < bytes) {
 		s = nextSeed(s);
-		out += alphabet[(s % (alphabet.length as uint32)) as int32];
+		const piece = alphabet[(s % (alphabet.length as uint32)) as int32];
+		parts.push(piece);
+		size += piece.byteLength;
 	}
-	return out;
+	return parts.join("");
+}
+
+function boundaryAt(text: string, at: int32): int32 {
+	let b = at;
+	while (b > 0 && b < text.byteLength && isContinuation(text, b)) { b -= 1; }
+	return b;
 }
 
 function linesMatch(rope: Rope, model: string): boolean {
@@ -223,12 +339,41 @@ function linesMatch(rope: Rope, model: string): boolean {
 	return true;
 }
 
+function balanced(node: Node, isRoot: boolean): boolean {
+	if (node.height == 0) { return node.bytes <= LEAF_MAX && (isRoot || node.bytes > 0); }
+	if ((node.children.length as int32) > BRANCH_MAX) { return false; }
+	if (!isRoot && (node.children.length as int32) < 2) { return false; }
+	for (let k = 0; k < node.children.length; k++) {
+		const c = node.children[k];
+		if (node.sizes[k] != c.bytes || node.lines[k] != c.breaks) { return false; }
+		if (c.height != node.height - 1 || !balanced(c, false)) { return false; }
+	}
+	return true;
+}
+
+function textOf(node: Node): string {
+	const out: string[] = [];
+	collect(node, 0, node.bytes, out);
+	return out.join("");
+}
+
 test "an empty rope has one empty line" {
 	const r = new Rope("");
 	assert r.length() == 0;
 	assert r.lineCount() == 1;
 	assert r.line(0) == "";
 	assert r.lineOf(0) == 0;
+}
+
+test "offsets count UTF-8 bytes" {
+	const r = new Rope("tiếng\n😀x");
+	assert r.length() == 13;
+	assert r.lineStart(1) == 8;
+	assert r.lineEnd(0) == 7;
+	assert r.byteAt(12) == 120;
+	assert r.slice(8, 12) == "😀";
+	assert r.lineOf(7) == 0;
+	assert r.lineOf(8) == 1;
 }
 
 test "lines and their offsets" {
@@ -243,63 +388,94 @@ test "lines and their offsets" {
 	assert r.lineOf(9) == 3;
 }
 
-test "a long text splits into chunks and reads back whole" {
-	const text = sampleText(7, 5000);
+test "a large text builds a balanced tree and reads back whole" {
+	const text = sampleText(7, 200 * LEAF_MAX);
 	const r = new Rope(text);
-	assert r.chunkCount() > 4;
+	assert r.height() >= 2;
 	assert r.text() == text;
-	assert r.length() == (text.length as int32);
+	assert r.length() == text.byteLength;
 	assert linesMatch(r, text);
 }
 
-test "a chunk boundary never splits a surrogate pair" {
-	let text = "";
-	for (let i = 0; i < 1500; i++) { text += "😀"; }
+test "a leaf boundary never splits a code point" {
+	const parts: string[] = [];
+	for (let i = 0; i < 1500; i++) { parts.push("😀é"); }
+	const text = parts.join("");
 	const r = new Rope(text);
-	assert r.slice(1022, 1026) == "😀😀";
 	assert r.text() == text;
+	assert r.slice(6 * 400, 6 * 402) == "😀é😀é";
 }
 
-test "replace inserts, deletes and spans chunks" {
-	const text = sampleText(11, 3000);
-	const r = new Rope(text);
-	r.replace(10, 10, "INSERT\n");
-	let model = text.slice(0, 10) + "INSERT\n" + text.slice(10);
-	assert r.text() == model;
-	r.replace(500, 2500, "");
-	model = model.slice(0, 500) + model.slice(2500);
-	assert r.text() == model;
-	assert linesMatch(r, model);
+test "building turns CRLF into LF, across leaf boundaries too" {
+	const parts: string[] = [];
+	for (let i = 0; i < 3000; i++) { parts.push("ab\r\n"); }
+	const r = new Rope(parts.join(""));
+	assert r.length() == 9000;
+	assert r.lineCount() == 3001;
+	assert r.line(2999) == "ab";
+	assert r.text().byteIndexOf("\r") < 0;
 }
 
-test "random edits agree with a plain string" {
+test "random edits agree with a plain string and keep the tree balanced" {
 	let seed: uint32 = 2026;
-	let model = sampleText(3, 4000);
+	let model = sampleText(3, 40 * LEAF_MAX);
+	const leaves: Node[] = [];
+	pushLeaves(model, false, leaves);
+	let root = rootOf(leaves);
+	for (let step = 0; step < 400; step++) {
+		seed = nextSeed(seed);
+		const total = model.byteLength as uint32;
+		const from = boundaryAt(model, (seed % (total + 1)) as int32);
+		seed = nextSeed(seed);
+		const span = step % 7 == 0 ? (seed % (10 * LEAF_MAX as uint32)) as int32 : (seed % 40) as int32;
+		const to = boundaryAt(model, Math.min(from + span, total as int32));
+		seed = nextSeed(seed);
+		const size = step % 11 == 0 ? (seed % (6 * LEAF_MAX as uint32)) as int32 : (seed % 8) as int32;
+		const insert = step % 3 == 0 ? "" : sampleText(seed, size);
+		root = rootOf(replaced(root, from, to, insert));
+		model = model.byteSlice(0, from) + insert + model.byteSlice(to, model.byteLength);
+		assert root.bytes == model.byteLength;
+		assert balanced(root, true);
+	}
+	assert textOf(root) == model;
+	assert root.breaks == breaksIn(model);
+}
+
+test "rope queries agree with a plain string after edits" {
+	let model = sampleText(13, 60000);
 	const r = new Rope(model);
-	for (let step = 0; step < 300; step++) {
-		seed = nextSeed(seed);
-		const total = model.length as uint32;
-		let from = (seed % (total + 1)) as int32;
-		seed = nextSeed(seed);
-		let to = Math.min(from + ((seed % 700) as int32), total as int32);
-		if (from > 0 && isHighSurrogate(model.charCodeAt(from - 1))) { from -= 1; }
-		if (to > 0 && to < (total as int32) && isHighSurrogate(model.charCodeAt(to - 1))) { to += 1; }
-		seed = nextSeed(seed);
-		const insert = step % 3 == 0 ? "" : sampleText(seed, (seed % 1500) as int32);
+	const edits = [[100, 5000, 7], [30000, 30000, 2000], [0, 10, 3], [40000, 52000, 0]];
+	for (const e of edits) {
+		const from = boundaryAt(model, e[0] as int32);
+		const to = boundaryAt(model, Math.min(e[1] as int32, model.byteLength));
+		const insert = sampleText(from as uint32 + 1, e[2] as int32);
 		r.replace(from, to, insert);
-		model = model.slice(0, from) + insert + model.slice(to);
-		assert r.length() == (model.length as int32);
+		model = model.byteSlice(0, from) + insert + model.byteSlice(to, model.byteLength);
 	}
 	assert r.text() == model;
 	assert linesMatch(r, model);
-	const probe = (model.length as int32) / 3;
-	assert r.lineOf(probe) == (model.slice(0, probe).split("\n").length as int32) - 1;
+	const probe = boundaryAt(model, model.byteLength / 3);
+	assert r.lineOf(probe) == breaksIn(model.byteSlice(0, probe));
+	for (let k = 0; k < 50; k++) {
+		const at = (k * 397) % model.byteLength;
+		assert r.byteAt(at) == model.byteAt(at);
+	}
 }
 
-test "deleting everything leaves one empty chunk" {
-	const r = new Rope(sampleText(5, 3000));
+test "a kept root still reads the text from before an edit" {
+	const text = sampleText(9, 50000);
+	const leaves: Node[] = [];
+	pushLeaves(text, false, leaves);
+	const before = rootOf(leaves);
+	const after = rootOf(replaced(before, 100, 40000, "x"));
+	assert textOf(before) == text;
+	assert after.bytes == text.byteLength - 39900 + 1;
+}
+
+test "deleting everything leaves one empty leaf" {
+	const r = new Rope(sampleText(5, 30000));
 	r.replace(0, r.length(), "");
 	assert r.length() == 0;
 	assert r.lineCount() == 1;
-	assert r.chunkCount() == 1;
+	assert r.height() == 0;
 }

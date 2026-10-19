@@ -145,9 +145,9 @@ function outdent(e: Editor): void {
 		const from = e.doc.lineStart(l);
 		const end = e.doc.lineEnd(l);
 		let to = from;
-		if (from < end && e.doc.codeAt(from) == TAB) { to = from + 1; }
+		if (from < end && e.doc.byteAt(from) == TAB) { to = from + 1; }
 		else {
-			while (to < end && to - from < OUTDENT_SPACES && e.doc.codeAt(to) == SPACE) { to += 1; }
+			while (to < end && to - from < OUTDENT_SPACES && e.doc.byteAt(to) == SPACE) { to += 1; }
 		}
 		if (to > from) { edits.push({ from, to, text: "" }); }
 	}
@@ -240,11 +240,11 @@ function selectNextOccurrence(e: Editor): void {
 	}
 	const needle = e.doc.slice(primary.start(), primary.end());
 	const all = e.doc.text();
-	let at = all.indexOf(needle, ranges[ranges.length - 1].end());
-	if (at < 0) { at = all.indexOf(needle); }
+	let at = all.byteIndexOf(needle, ranges[ranges.length - 1].end());
+	if (at < 0) { at = all.byteIndexOf(needle); }
 	for (const s of ranges) { if (s.start() == at) { return; } }
 	const next = ranges.slice(0, ranges.length);
-	next.push(span(at, at + (needle.length as int32)));
+	next.push(span(at, at + needle.byteLength));
 	e.select({ ranges: next, primary: (next.length as int32) - 1 });
 }
 
@@ -408,11 +408,11 @@ test "left and right step clusters and collapse a selection first" {
 	const run = runner();
 	const e = editorAt("a😀b", [1]);
 	run(e, "right");
-	assert heads(e) == "3";
+	assert heads(e) == "5";
 	run(e, "selectLeft");
-	assert heads(e) == "3-1";
+	assert heads(e) == "5-1";
 	run(e, "right");
-	assert heads(e) == "3";
+	assert heads(e) == "5";
 }
 
 test "up and down keep the goal column across a short line" {
@@ -439,7 +439,7 @@ test "a newline keeps the indent before the cursor" {
 
 test "backspace at several cursors deletes one cluster each and is one step" {
 	const run = runner();
-	const e = editorAt("a😀\nb😀", [3, 7]);
+	const e = editorAt("a😀\nb😀", [5, 11]);
 	run(e, "backspace");
 	assert e.doc.text() == "a\nb";
 	assert heads(e) == "1,3";
