@@ -33,7 +33,7 @@ struct AnchorSlot {
 
 export function mapOffset(offset: int32, change: Change, bias: Bias): int32 {
 	if (offset < change.from) { return offset; }
-	if (change.removed == 0) { return bias == Bias.Left ? offset : offset + change.inserted; }
+	if (offset == change.from && change.removed == 0) { return bias == Bias.Left ? offset : offset + change.inserted; }
 	if (offset >= change.from + change.removed) { return offset + change.inserted - change.removed; }
 	return change.from + (bias == Bias.Left ? 0 : change.inserted);
 }
@@ -198,4 +198,8 @@ test "mapping offsets through a replacement" {
 	assert mapOffset(6, c, Bias.Right) == 9;
 	assert mapOffset(6, c, Bias.Left) == 9;
 	assert mapOffset(7, c, Bias.Left) == 10;
+	const insert: Change = { from: 4, removed: 0, inserted: 3 };
+	assert mapOffset(4, insert, Bias.Left) == 4;
+	assert mapOffset(5, insert, Bias.Left) == 8;
+	assert mapOffset(5, insert, Bias.Right) == 8;
 }
