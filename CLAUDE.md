@@ -11,8 +11,13 @@ A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
 - Every document change goes through one choke point (the document's splice), which returns the
   inverse edit, bumps the version and maps anchors and selections. Undo, the edit log and later
   LSP sync hang off it; a second write path desynchronises all three.
-- Offsets are UTF-16 code units, the unit MetaScript strings index by, IME reports in and LSP
-  defaults to. Grapheme boundaries are computed for movement, never stored.
+- Offsets are UTF-8 bytes. MetaScript's UTF-16 string calls (`length`, `slice`, `charCodeAt`)
+  walk the string on non-ASCII text, while the byte tier (`byteAt`, `byteSlice`, `byteLength`) does
+  not, so the rope and every model API index by byte; UTF-16, which LSP speaks, is converted at
+  that edge, within a line. Grapheme boundaries are computed for movement, never stored.
+- The rope (`src/text/rope.ms`) is a persistent B-tree of UTF-8 leaves: an edit copies its path
+  and shares the rest, so a kept root is a snapshot. Its hot paths use index loops, because a
+  `for-of` over a node array measured twice as slow.
 - A per-frame cost is bounded by the viewport, never by the document size.
 
 ## Build and run
