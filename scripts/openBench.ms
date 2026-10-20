@@ -1,6 +1,7 @@
 import { argv } from "std/process";
 import { Document } from "../src/model/document";
 import { columnOf } from "../src/model/motion";
+import { rowText, rowsOf } from "../src/view/wrap";
 
 const mb = parseInt(argv[argv.length - 1]) as int32;
 const line = "const value = compute(alpha, beta) + 42; // tiếng Việt, emoji 😀 ở đây\r\n";
@@ -18,11 +19,14 @@ const top = doc.lineCount() / 2;
 let sum = 0;
 t0 = Date.now();
 for (let frame = 0; frame < 100; frame++) {
-	for (let i = 0; i < 40; i++) { sum += doc.line(top + i).byteLength; }
+	for (let i = 0; i < 40; i++) {
+		const rows = rowsOf(doc, top + i, 60);
+		for (const r of rows) { sum += rowText(doc, r, 0, 60).byteLength; }
+	}
 	const head = doc.lineEnd(top + 20);
 	sum += columnOf(doc, head) + doc.lineOf(head);
 }
-console.log(`frame, 40 lines and a caret column: ${(Date.now() - t0) * 10} us`);
+console.log(`frame, 40 wrapped lines drawn and a caret column: ${(Date.now() - t0) * 10} us`);
 
 t0 = Date.now();
 for (let i = 0; i < 1000; i++) {

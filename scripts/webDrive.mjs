@@ -1,6 +1,6 @@
 // Drives the web build in headless Chrome over the DevTools protocol and saves screenshots.
 //   node scripts/webDrive.mjs <url> <outDir> <step>...
-// Steps: wait:<ms>  shot:<name>  wheel:<deltaY>  key:[ctrl+][alt+][shift+]<key>[*n]  type:<text> (keypresses)  text:<text> (insertText)
+// Steps: wait:<ms>  shot:<name>  wheel:<deltaY>  hwheel:<deltaX>  key:[ctrl+][alt+][shift+]<key>[*n]  type:<text> (keypresses)  text:<text> (insertText)
 //        compose:<text>  commit:<text>  click:<x>,<y>[,<count>][,alt|shift]  drag:<x1>,<y1>,<x2>,<y2>
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -93,6 +93,9 @@ for (const step of steps) {
 		console.log(`shot ${arg}`);
 	} else if (kind === "wheel") {
 		await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 400, y: 300, deltaX: 0, deltaY: Number(arg) });
+		await sleep(100);
+	} else if (kind === "hwheel") {
+		await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 400, y: 300, deltaX: Number(arg), deltaY: 0 });
 		await sleep(100);
 	} else if (kind === "key") {
 		const [chord, times = "1"] = arg.split("*");
