@@ -15,7 +15,7 @@ import { Sel, Selections, cursorAt, primaryRange, sameSelections, single, span }
 import { Query, nextMatch, selectAllMatches } from "./find";
 import { pairAround, typeText } from "./pairs";
 import { BracketPair, enclosingBrackets } from "./brackets";
-import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
+import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
 
@@ -92,6 +92,26 @@ function byPages(pages: int32): Motion {
 function lineEndAt(doc: Document, at: int32): int32 { return doc.lineEnd(doc.lineOf(at)); }
 function docStart(doc: Document, at: int32): int32 { return 0; }
 function docEnd(doc: Document, at: int32): int32 { return doc.length(); }
+
+function rowAt(doc: Document, cx: Context, at: int32): VisualRow {
+	const rows = rowsOf(doc, doc.lineOf(at), cx.wrapWidth());
+	return rows[rowIndexOf(rows, at)];
+}
+
+function toRowStart(e: Editor, cx: Context, extend: boolean): void {
+	moved(e, extend, (doc: Document, s: Sel): int32 => {
+		const soft = rowAt(doc, cx, s.head).from;
+		return soft > indentEnd(doc, doc.lineOf(s.head)) && s.head != soft ? soft : doc.smartHome(s.head);
+	});
+}
+
+function toRowEnd(e: Editor, cx: Context, extend: boolean): void {
+	moved(e, extend, (doc: Document, s: Sel): int32 => {
+		const r = rowAt(doc, cx, s.head);
+		const soft = r.last ? r.to : prevCluster(doc, r.to);
+		return s.head != soft ? soft : lineEndAt(doc, s.head);
+	});
+}
 
 function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 	const doc = e.doc;
@@ -570,8 +590,8 @@ export function commands(): Map<string, Command> {
 	addMotion("pageDown", "selectPageDown", byPages(1));
 	addMotion("wordLeft", "selectWordLeft", jump(wordLeft));
 	addMotion("wordRight", "selectWordRight", jump(wordRight));
-	addMotion("home", "selectHome", jump(smartHome));
-	addMotion("end", "selectEnd", jump(lineEndAt));
+	addMotion("home", "selectHome", toRowStart);
+	addMotion("end", "selectEnd", toRowEnd);
 	addMotion("docStart", "selectDocStart", jump(docStart));
 	addMotion("docEnd", "selectDocEnd", jump(docEnd));
 	table.set("selectAll", (e: Editor, cx: Context): void => {
@@ -1036,6 +1056,31 @@ test "alt-click adds a cursor and shift-click extends the primary" {
 	assert e.selections.primary == 1;
 	const _b = press(e, 6, 1, true, false);
 	assert heads(e) == "1,4-6";
+}
+
+test "home and end stop at the wrapped row's ends before the line's" {
+	const run = runner();
+	const e = editorAt("aaaa bbbb cccc", [7]);
+	run(e, "toggleWrap");
+	run(e, "end");
+	assert heads(e) == "9";
+	run(e, "end");
+	assert heads(e) == "14";
+	run(e, "home");
+	assert heads(e) == "10";
+	run(e, "home");
+	assert heads(e) == "0";
+	run(e, "selectEnd");
+	assert heads(e) == "0-4";
+}
+
+test "home from inside the indent goes to the line start" {
+	const run = runner();
+	const e = editorAt("		ab", [1]);
+	run(e, "home");
+	assert heads(e) == "0";
+	run(e, "home");
+	assert heads(e) == "2";
 }
 
 test "home, end, word and document motions, and their select forms keep the anchor" {

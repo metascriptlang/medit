@@ -111,7 +111,7 @@ export function indentEnd(this doc: Document, line: int32): int32 {
 export function smartHome(this doc: Document, offset: int32): int32 {
 	const line = doc.lineOf(offset);
 	const indent = doc.indentEnd(line);
-	return offset == indent ? doc.lineStart(line) : indent;
+	return offset > indent || offset == doc.lineStart(line) ? indent : doc.lineStart(line);
 }
 
 test "a cluster holds a surrogate pair, its combining marks and a ZWJ sequence" {
