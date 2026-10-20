@@ -20,6 +20,11 @@ const CARET_WIDTH: float64 = 2;
 const MIN_DIGITS: int32 = 3;
 const GUTTER_GAP: int32 = 2;
 
+export struct Grid {
+	cellWidth: float64;
+	rowHeight: float64;
+}
+
 export struct Painted {
 	rows: Row[];
 	shades: Box[];
@@ -50,9 +55,9 @@ export function painted(
 	frame: VisualRow[],
 	view: Viewport,
 	syntax: Syntax | null,
-	cellWidth: float64,
-	rowHeight: float64,
+	grid: Grid,
 ): Painted {
+	const { cellWidth, rowHeight } = grid;
 	const gutter = gutterWidth(doc.lineCount());
 	const textX = gutter * cellWidth;
 	const digits = gutter - GUTTER_GAP;

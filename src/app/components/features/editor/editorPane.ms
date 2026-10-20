@@ -27,7 +27,7 @@ import { Preedit } from "../../content/preedit";
 import { FindBar } from "../find/findBar";
 import { createFinder } from "../find/finder";
 import { createBlink } from "./blink";
-import { framed, gutterWidth, painted } from "./paint";
+import { Grid, framed, gutterWidth, painted } from "./paint";
 
 const PROBE = "MMMMMMMMMM";
 const MULTI_CLICK_MS: float64 = 400;
@@ -65,8 +65,8 @@ export function EditorPane(props: {
 	let lastPress = 0.0;
 	let lastOffset = -1;
 	let clicks = 0;
-	const [cellWidth, setCellWidth] = createSignal<float64>(0);
-	const [rowHeight, setRowHeight] = createSignal<float64>(0);
+	let grid: Grid = { cellWidth: 0, rowHeight: 0 };
+	const [drawn, setDrawn] = createSignal<Grid>(grid);
 	const [caret, setCaret] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
 	const [preedit, setPreedit] = createSignal<string>("");
 	const rows: List<Row> = createList<Row>([]);
@@ -84,7 +84,7 @@ export function EditorPane(props: {
 	const paint = (): void => {
 		fit();
 		frame = framed(doc, view, wrapWidth());
-		const p = painted(doc, editor.selections, frame, view, syntax, cellWidth(), rowHeight());
+		const p = painted(doc, editor.selections, frame, view, syntax, grid);
 		fill(rows, p.rows);
 		fill(shades, p.shades);
 		fill(carets, p.carets);
@@ -142,8 +142,8 @@ export function EditorPane(props: {
 			fail(`cell ${probe.width / PROBE.length}x${probe.height} is not a grid size`);
 			return;
 		}
-		setCellWidth(cellPx / ratio);
-		setRowHeight(rowPx / ratio);
+		grid = { cellWidth: cellPx / ratio, rowHeight: rowPx / ratio };
+		setDrawn(grid);
 		columns = Math.floor(PixelRatio.getPixelSizeForLayoutSize(e.width) / cellPx) as int32;
 		const heightPx = PixelRatio.getPixelSizeForLayoutSize(e.height);
 		view = { ...view, rows: Math.max(1, Math.floor(heightPx / rowPx) as int32) };
@@ -186,15 +186,15 @@ export function EditorPane(props: {
 	};
 
 	const offsetAt = (e: NeonEvent): int32 => {
-		const i = Math.floor(Math.max(0, e.locationY) / rowHeight()) as int32;
+		const i = Math.floor(Math.max(0, e.locationY) / grid.rowHeight) as int32;
 		if (frame.length == 0 || i >= (frame.length as int32)) { return doc.length(); }
-		const textX = gutterWidth(doc.lineCount()) * cellWidth();
-		const cell = Math.round((Math.max(0, e.locationX) - textX) / cellWidth()) as int32;
+		const textX = gutterWidth(doc.lineCount()) * grid.cellWidth;
+		const cell = Math.round((Math.max(0, e.locationX) - textX) / grid.cellWidth) as int32;
 		return offsetIn(doc, frame[i], view.left + Math.max(0, cell));
 	};
 
 	const pressed = (e: NeonEvent): void => {
-		if (cellWidth() <= 0 || e.button != 1) { return; }
+		if (grid.cellWidth <= 0 || e.button != 1) { return; }
 		const offset = offsetAt(e);
 		const now = Date.now();
 		clicks = now - lastPress < MULTI_CLICK_MS && offset == lastOffset ? clicks % 3 + 1 : 1;
@@ -237,8 +237,8 @@ export function EditorPane(props: {
 			imeRect={{
 				x: caret().x,
 				y: caret().y,
-				width: cellWidth(),
-				height: rowHeight(),
+				width: drawn().cellWidth,
+				height: drawn().rowHeight,
 			}}
 			onLayout={layout}
 			onKeyDown={typed}
@@ -256,8 +256,8 @@ export function EditorPane(props: {
 				each: rows,
 				children: (r: Accessor<Row>): NeonNode => <LineRow
 					row={r()}
-					cellWidth={cellWidth()}
-					rowHeight={rowHeight()}
+					cellWidth={drawn().cellWidth}
+					rowHeight={drawn().rowHeight}
 				/>,
 			})}
 			{ForList<Box>({
@@ -265,7 +265,7 @@ export function EditorPane(props: {
 				children: (b: Accessor<Box>): NeonNode => <Overlay box={b()} shown={blink.on()} />,
 			})}
 			<Show when={preedit() != ""}>
-				<Preedit text={preedit()} at={caret()} cellWidth={cellWidth()} />
+				<Preedit text={preedit()} at={caret()} cellWidth={drawn().cellWidth} />
 			</Show>
 		</View>
 		<FindBar finder={finder} moved={reveal} closed={focus} />
