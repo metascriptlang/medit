@@ -5,7 +5,7 @@ A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
 
 ## Layers
 
-- `src/text`, `src/model`, `src/input`, `src/view/viewport.ms` are headless: they import nothing
+- `src/text`, `src/model`, `src/input`, `src/view` are headless: they import nothing
   from Neon, Void or Ion, so the core runs and tests on every target and a vim layer, LSP or remote
   host can drive it later. Only `src/app` touches Neon.
 - Every document change goes through one choke point (the document's splice), which returns the
@@ -18,6 +18,9 @@ A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
 - The rope (`src/text/rope.ms`) is a persistent B-tree of UTF-8 leaves: an edit copies its path
   and shares the rest, so a kept root is a snapshot. Its hot paths use index loops, because a
   `for-of` over a node array measured twice as slow.
+- Cluster and cell walks (`src/text/clusters.ms`) run over a line's bytes, read from the rope once:
+  a frame of 40 wrapped lines took 3.6 ms through the rope's `byteAt` against 0.2 ms over line bytes
+  (100 MB, release, 2026-10-20). Columns, wrap, drawing and clicks share that one width function.
 - A per-frame cost is bounded by the viewport, never by the document size.
 
 ## Build and run
