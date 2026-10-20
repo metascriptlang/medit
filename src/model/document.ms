@@ -64,19 +64,15 @@ export function mapOffset(offset: int32, change: Change, bias: Bias): int32 {
 
 export class Document {
 	private rope: Rope;
-	private current: int32;
-	private log: LoggedChange[];
-	private anchors: AnchorSlot[];
-	private freeSlots: int32[];
 	private crlf: boolean;
+	private current: int32 = 0;
+	private log: Vec<LoggedChange> = [];
+	private anchors: Vec<AnchorSlot> = [];
+	private freeSlots: Vec<int32> = [];
 
 	constructor(text: string) {
 		this.rope = new Rope(text);
 		this.crlf = text.breaksWithCrlf();
-		this.current = 0;
-		this.log = [];
-		this.anchors = [];
-		this.freeSlots = [];
 	}
 
 	version(): int32 { return this.current; }
@@ -96,7 +92,8 @@ export class Document {
 	}
 
 	splice(edit: Edit): Edit {
-		const text = edit.text.byteIndexOf("\r") < 0 ? edit.text : edit.text.replaceAll("\r\n", "\n");
+		const text = edit.text.byteIndexOf("\r") < 0 ?
+			edit.text : edit.text.replaceAll("\r\n", "\n");
 		const removed = this.rope.slice(edit.from, edit.to);
 		const line = this.rope.lineOf(edit.from);
 		const start: Point = { line, column: edit.from - this.rope.lineStart(line) };
@@ -116,7 +113,7 @@ export class Document {
 		});
 		for (let i = 0; i < this.anchors.length; i++) {
 			const slot = this.anchors[i];
-			if (slot.live) { this.anchors[i] = { ...slot, offset: mapOffset(slot.offset, change, slot.bias) }; }
+			if (slot.live) { this.anchors[i].offset = mapOffset(slot.offset, change, slot.bias); }
 		}
 		return { from: edit.from, to: edit.from + change.inserted, text: removed };
 	}
@@ -132,7 +129,7 @@ export class Document {
 			throw new Error(`Document.anchor: offset ${offset} is outside 0..${this.length()}`);
 		}
 		if (this.freeSlots.length > 0) {
-			const slot = this.freeSlots.pop() as int32;
+			const slot = this.freeSlots.pop();
 			const generation = this.anchors[slot].generation + 1;
 			this.anchors[slot] = { offset, bias, generation, live: true };
 			return { slot, generation };
