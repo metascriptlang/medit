@@ -42,7 +42,7 @@ export class Editor {
 				throw new Error(`Editor.select: ${s.anchor}..${s.head} is outside 0..${this.doc.length()}`);
 			}
 		}
-		this.selections = normalized(next);
+		this.selections = next.normalized();
 	}
 
 	begin(): void {
@@ -65,7 +65,7 @@ export class Editor {
 		if (this.depth > 0 || this.pending.length == 0) { return; }
 		const last = this.undos.length - 1;
 		if (this.group != "" && this.group == this.lastGroup && last >= 0 &&
-			sameSelections(this.undos[last].after, this.pendingBefore)) {
+			this.undos[last].after.sameSelections(this.pendingBefore)) {
 			const top = this.undos[last];
 			const edits = top.edits.slice(0, top.edits.length);
 			for (const e of this.pending) { edits.push(e); }

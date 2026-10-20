@@ -25,25 +25,27 @@ export function single(offset: int32): Selections {
 	return { ranges: [cursorAt(offset)], primary: 0 };
 }
 
-export function sameSelections(a: Selections, b: Selections): boolean {
+export function sameSelections(this a: Selections, b: Selections): boolean {
 	if (a.ranges.length != b.ranges.length) { return false; }
 	for (let i = 0; i < a.ranges.length; i++) {
-		if (a.ranges[i].anchor != b.ranges[i].anchor || a.ranges[i].head != b.ranges[i].head) { return false; }
+		const x = a.ranges[i];
+		const y = b.ranges[i];
+		if (x.anchor != y.anchor || x.head != y.head) { return false; }
 	}
 	return true;
 }
 
-function overlaps(a: Sel, b: Sel): boolean {
+function overlaps(this a: Sel, b: Sel): boolean {
 	return b.start() < a.end() || b.start() == a.start();
 }
 
-function union(a: Sel, b: Sel): Sel {
+function union(this a: Sel, b: Sel): Sel {
 	const from = Math.min(a.start(), b.start());
 	const to = Math.max(a.end(), b.end());
 	return a.head < a.anchor ? span(to, from) : span(from, to);
 }
 
-export function normalized(s: Selections): Selections {
+export function normalized(this s: Selections): Selections {
 	if (s.primary < 0 || s.primary >= (s.ranges.length as int32)) {
 		throw new Error(`normalized: primary ${s.primary} is outside ${s.ranges.length} ranges`);
 	}
@@ -54,8 +56,8 @@ export function normalized(s: Selections): Selections {
 	let primary = 0;
 	for (const sel of sorted) {
 		const last = merged.length - 1;
-		if (last >= 0 && overlaps(merged[last], sel)) {
-			merged[last] = union(merged[last], sel);
+		if (last >= 0 && merged[last].overlaps(sel)) {
+			merged[last] = merged[last].union(sel);
 		} else {
 			merged.push(sel);
 		}
