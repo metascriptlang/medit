@@ -8,6 +8,7 @@ import { View, ViewHandle } from "../../../../../../neon/src/components/primitiv
 import { Editor } from "../../../../model/editor";
 import { Sel, primaryRange, span } from "../../../../model/selection";
 import { Query, matchesIn } from "../../../../model/find";
+import { BracketPair, enclosingBrackets } from "../../../../model/brackets";
 import {
 	Clip,
 	Context,
@@ -91,10 +92,19 @@ export function EditorPane(props: {
 			.map((at: int32): Sel => span(at, at + n));
 	};
 
+	const bracketed = (): Sel[] => {
+		const s = editor.selections.primaryRange();
+		if (!s.isEmpty()) { return []; }
+		const found = doc.enclosingBrackets(s.head, s.head);
+		if (found === null) { return []; }
+		const p = found as BracketPair;
+		return [span(p.open, p.open + 1), span(p.close, p.close + 1)];
+	};
+
 	const paint = (): void => {
 		fit();
 		frame = framed(doc, view, wrapWidth());
-		const p = painted(doc, editor.selections, marked(), frame, view, syntax, grid);
+		const p = painted(doc, editor.selections, marked(), bracketed(), frame, view, syntax, grid);
 		fill(rows, p.rows);
 		fill(shades, p.shades);
 		fill(carets, p.carets);

@@ -5,6 +5,7 @@ export const FOREGROUND = "#cdd6f4";
 export const MUTED = "#6c7086";
 export const SELECTION = "#45475a";
 export const MATCH = "#4a4536";
+export const BRACKET = "#585b70";
 export const CURRENT_LINE = "#2a2b3c";
 export const CURRENT_NUMBER = "#bac2de";
 export const CARET = "#f5e0dc";

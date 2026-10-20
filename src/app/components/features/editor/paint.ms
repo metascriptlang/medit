@@ -7,6 +7,7 @@ import { VisualRow, cellIn, holds, rowPieces, rowsOf } from "../../../../view/wr
 import { Syntax } from "../../../../syntax/syntax";
 import {
 	CARET,
+	BRACKET,
 	CURRENT_LINE,
 	CURRENT_NUMBER,
 	MATCH,
@@ -54,6 +55,7 @@ export function painted(
 	doc: Document,
 	selections: Selections,
 	marks: Sel[],
+	brackets: Sel[],
 	frame: VisualRow[],
 	view: Viewport,
 	syntax: Syntax | null,
@@ -110,6 +112,7 @@ export function painted(
 	const carets: Box[] = [];
 	let primary: Box | null = null;
 	for (const m of marks) { shade(m, MATCH, found); }
+	for (const b of brackets) { shade(b, BRACKET, found); }
 	for (const s of selections.ranges) {
 		if (s.end() < top || s.start() > bottom + 1) { continue; }
 		for (let i = 0; i < (frame.length as int32); i++) {
