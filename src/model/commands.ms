@@ -272,15 +272,9 @@ export function paste(e: Editor, pasted: string): void {
 	const text = pasted.replaceAll("\r\n", "\n");
 	const parts = text.split("\n");
 	const count = e.selections.ranges.length;
-	if (count > 1 && parts.length == count) {
-		e.replaceEach(parts);
-		return;
-	}
-	if (count > 1 && parts.length == count + 1 && parts[count] == "") {
-		e.replaceEach(parts.slice(0, count));
-		return;
-	}
-	e.replaceSelections(text);
+	const lines = parts.length == count + 1 && parts[count] == "" ? parts.slice(0, count) : parts;
+	if (count > 1 && lines.length == count) { e.replaceEach(lines); }
+	else { e.replaceSelections(text); }
 }
 
 function addCursor(e: Editor, rows: int32): void {
