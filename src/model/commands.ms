@@ -12,6 +12,7 @@ import {
 	wordRight,
 } from "./motion";
 import { Sel, cursorAt, single, span } from "./selection";
+import { nextMatch } from "./find";
 import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const TAB: int32 = 9;
@@ -262,9 +263,7 @@ function selectNextOccurrence(e: Editor): void {
 		return;
 	}
 	const needle = e.doc.slice(primary.start(), primary.end());
-	const all = e.doc.text();
-	let at = all.byteIndexOf(needle, ranges[ranges.length - 1].end());
-	if (at < 0) { at = all.byteIndexOf(needle); }
+	const at = nextMatch(e.doc, needle, ranges[ranges.length - 1].end());
 	for (const s of ranges) { if (s.start() == at) { return; } }
 	const next = ranges.slice(0, ranges.length);
 	next.push(span(at, at + needle.byteLength));
