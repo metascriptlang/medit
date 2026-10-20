@@ -43,10 +43,16 @@ export function offsetAtCell(
 }
 
 function classOf(code: int32): CharClass {
-	if (code == NEWLINE) { return CharClass.Newline; }
-	if (code == 32 || code == 9 || code == 13) { return CharClass.Space; }
-	const alnum = (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
-	return alnum || code == 95 || code >= 0x80 ? CharClass.Word : CharClass.Punct;
+	return match (code) {
+		NEWLINE => CharClass.Newline,
+		" ".code | "\t".code | "\r".code => CharClass.Space,
+		"_".code => CharClass.Word,
+		_ when code >= "0".code && code <= "9".code => CharClass.Word,
+		_ when code >= "A".code && code <= "Z".code => CharClass.Word,
+		_ when code >= "a".code && code <= "z".code => CharClass.Word,
+		_ when code >= 0x80 => CharClass.Word,
+		_ => CharClass.Punct,
+	};
 }
 
 function classAt(this doc: Document, at: int32): CharClass {
