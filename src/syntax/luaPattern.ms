@@ -1,124 +1,129 @@
-const PERCENT: int32 = 37;
-const OPEN: int32 = 91;
-const CLOSE: int32 = 93;
-const CARET: int32 = 94;
-const DOLLAR: int32 = 36;
-const DOT: int32 = 46;
-const DASH: int32 = 45;
+type Bytes = Readonly<Span<uint8>>;
 
-function at(b: Readonly<Span<uint8>>, i: int32): int32 {
-	return i < (b.length as int32) ? b[i] as int32 : -1;
+const DELETE: int32 = 127;
+
+function at(bytes: Bytes, i: int32): int32 {
+	return i < bytes.length ? bytes[i] as int32 : -1;
 }
 
-function inClass(c: int32, cl: int32): boolean {
-	const lower = cl | 0x20;
+function inClass(c: int32, letter: int32): boolean {
+	const lower = letter | 0x20;
+	const folded = c | 0x20;
 	let hit = false;
-	if (lower == 97) { hit = (c | 0x20) >= 97 && (c | 0x20) <= 122; }
-	else if (lower == 100) { hit = c >= 48 && c <= 57; }
-	else if (lower == 108) { hit = c >= 97 && c <= 122; }
-	else if (lower == 117) { hit = c >= 65 && c <= 90; }
-	else if (lower == 115) { hit = c == 32 || (c >= 9 && c <= 13); }
-	else if (lower == 119) { hit = inClass(c, 97) || inClass(c, 100); }
-	else if (lower == 120) { hit = inClass(c, 100) || ((c | 0x20) >= 97 && (c | 0x20) <= 102); }
-	else if (lower == 112) { hit = c > 32 && c < 127 && !inClass(c, 119); }
-	else if (lower == 99) { hit = c < 32 || c == 127; }
-	else { return c == cl; }
-	return cl == lower ? hit : !hit;
+	match (lower) {
+		"a".code => { hit = folded >= "a".code && folded <= "z".code; },
+		"d".code => { hit = c >= "0".code && c <= "9".code; },
+		"l".code => { hit = c >= "a".code && c <= "z".code; },
+		"u".code => { hit = c >= "A".code && c <= "Z".code; },
+		"s".code => { hit = c == " ".code || (c >= "\t".code && c <= "\r".code); },
+		"w".code => { hit = inClass(c, "a".code) || inClass(c, "d".code); },
+		"x".code => { hit = inClass(c, "d".code) || (folded >= "a".code && folded <= "f".code); },
+		"p".code => { hit = c > " ".code && c < DELETE && !inClass(c, "w".code); },
+		"c".code => { hit = c < " ".code || c == DELETE; },
+		_ => { return c == letter; },
+	};
+	return letter == lower ? hit : !hit;
 }
 
-function classEnd(p: Readonly<Span<uint8>>, i: int32): int32 {
-	const c = at(p, i);
-	if (c == PERCENT) {
-		if (i + 1 >= (p.length as int32)) { throw new Error("lua pattern ends with %"); }
-		const next = at(p, i + 1);
-		if (next == 98 || next == 102) { throw new Error(`lua pattern %${String.fromCharCode(next)} is not supported`); }
-		return i + 2;
-	}
-	if (c == 40 || c == 41) { throw new Error("lua pattern captures are not supported"); }
-	if (c != OPEN) { return i + 1; }
-	let k = i + 1;
-	if (at(p, k) == CARET) { k += 1; }
-	do {
-		if (k >= (p.length as int32)) { throw new Error("lua pattern has an unclosed ["); }
-		k += at(p, k) == PERCENT ? 2 : 1;
-	} while (at(p, k) != CLOSE);
-	return k + 1;
+function itemEnd(pattern: Bytes, start: int32): int32 {
+	match (at(pattern, start)) {
+		"%".code => {
+			const escaped = at(pattern, start + 1);
+			if (escaped < 0) { throw new Error("lua pattern ends with %"); }
+			if (escaped == "b".code || escaped == "f".code) {
+				throw new Error(`lua pattern %${String.fromCharCode(escaped)} is not supported`);
+			}
+			return start + 2;
+		},
+		"(".code | ")".code => { throw new Error("lua pattern captures are not supported"); },
+		"[".code => {
+			let k = start + 1;
+			if (at(pattern, k) == "^".code) { k += 1; }
+			do {
+				if (k >= pattern.length) { throw new Error("lua pattern has an unclosed ["); }
+				k += at(pattern, k) == "%".code ? 2 : 1;
+			} while (at(pattern, k) != "]".code);
+			return k + 1;
+		},
+		_ => { return start + 1; },
+	};
 }
 
-function inSet(c: int32, p: Readonly<Span<uint8>>, from: int32, close: int32): boolean {
-	let k = from + 1;
-	const negated = at(p, k) == CARET;
-	if (negated) { k += 1; }
-	while (k < close) {
-		if (at(p, k) == PERCENT) {
-			if (inClass(c, at(p, k + 1))) { return !negated; }
+function inSet(c: int32, set: Bytes): boolean {
+	const negated = at(set, 0) == "^".code;
+	let k = negated ? 1 : 0;
+	while (k < set.length) {
+		if (at(set, k) == "%".code) {
+			if (inClass(c, at(set, k + 1))) { return !negated; }
 			k += 2;
-		} else if (at(p, k + 1) == DASH && k + 2 < close) {
-			if (c >= at(p, k) && c <= at(p, k + 2)) { return !negated; }
+		} else if (at(set, k + 1) == "-".code && k + 2 < set.length) {
+			if (c >= at(set, k) && c <= at(set, k + 2)) { return !negated; }
 			k += 3;
 		} else {
-			if (c == at(p, k)) { return !negated; }
+			if (c == at(set, k)) { return !negated; }
 			k += 1;
 		}
 	}
 	return negated;
 }
 
-function single(c: int32, p: Readonly<Span<uint8>>, i: int32, end: int32): boolean {
+function matchesItem(c: int32, item: Bytes): boolean {
 	if (c < 0) { return false; }
-	const pc = at(p, i);
-	if (pc == DOT) { return true; }
-	if (pc == PERCENT) { return inClass(c, at(p, i + 1)); }
-	if (pc == OPEN) { return inSet(c, p, i, end - 1); }
-	return c == pc;
+	return match (at(item, 0)) {
+		".".code => true,
+		"%".code => inClass(c, at(item, 1)),
+		"[".code => inSet(c, item[1..item.length - 1]),
+		_ => c == at(item, 0),
+	};
 }
 
-function matchFrom(s: Readonly<Span<uint8>>, si: int32, p: Readonly<Span<uint8>>, pi: int32): int32 {
-	let i = si;
-	let k = pi;
-	const plen = p.length as int32;
-	while (k < plen) {
-		if (at(p, k) == DOLLAR && k + 1 == plen) { return i == (s.length as int32) ? i : -1; }
-		const end = classEnd(p, k);
-		const q = at(p, end);
-		if (q == 63) {
-			if (single(at(s, i), p, k, end)) {
-				const r = matchFrom(s, i + 1, p, end + 1);
-				if (r >= 0) { return r; }
-			}
-			k = end + 1;
-		} else if (q == 42 || q == 43) {
-			let n = 0;
-			while (single(at(s, i + n), p, k, end)) { n += 1; }
-			const least = q == 43 ? 1 : 0;
-			while (n >= least) {
-				const r = matchFrom(s, i + n, p, end + 1);
-				if (r >= 0) { return r; }
-				n -= 1;
-			}
-			return -1;
-		} else if (q == DASH) {
-			while (true) {
-				const r = matchFrom(s, i, p, end + 1);
-				if (r >= 0) { return r; }
-				if (!single(at(s, i), p, k, end)) { return -1; }
+function matchesFrom(text: Bytes, start: int32, pattern: Bytes, from: int32): boolean {
+	let i = start;
+	let k = from;
+	while (k < pattern.length) {
+		if (at(pattern, k) == "$".code && k + 1 == pattern.length) { return i == text.length; }
+		const end = itemEnd(pattern, k);
+		const item = pattern[k..end];
+		const quantifier = at(pattern, end);
+		match (quantifier) {
+			"?".code => {
+				if (matchesItem(at(text, i), item) && matchesFrom(text, i + 1, pattern, end + 1)) {
+					return true;
+				}
+				k = end + 1;
+			},
+			"*".code | "+".code => {
+				let most = 0;
+				while (matchesItem(at(text, i + most), item)) { most += 1; }
+				const least = quantifier == "+".code ? 1 : 0;
+				for (let count = most; count >= least; count--) {
+					if (matchesFrom(text, i + count, pattern, end + 1)) { return true; }
+				}
+				return false;
+			},
+			"-".code => {
+				while (!matchesFrom(text, i, pattern, end + 1)) {
+					if (!matchesItem(at(text, i), item)) { return false; }
+					i += 1;
+				}
+				return true;
+			},
+			_ => {
+				if (!matchesItem(at(text, i), item)) { return false; }
 				i += 1;
-			}
-		} else {
-			if (!single(at(s, i), p, k, end)) { return -1; }
-			i += 1;
-			k = end;
-		}
+				k = end;
+			},
+		};
 	}
-	return i;
+	return true;
 }
 
 export function luaMatches(text: string, pattern: string): boolean {
-	const s = text.asBytes();
-	const p = pattern.asBytes();
-	const anchored = at(p, 0) == CARET;
-	for (let si = 0; si <= (s.length as int32); si++) {
-		if (matchFrom(s, si, p, anchored ? 1 : 0) >= 0) { return true; }
+	const bytes = text.asBytes();
+	const items = pattern.asBytes();
+	const anchored = at(items, 0) == "^".code;
+	for (let start = 0; start <= bytes.length; start++) {
+		if (matchesFrom(bytes, start, items, anchored ? 1 : 0)) { return true; }
 		if (anchored) { return false; }
 	}
 	return false;
@@ -135,6 +140,30 @@ test "anchors, classes and sets" {
 	assert luaMatches("xx12", "%d+$");
 	assert luaMatches("a.b", "a%.b");
 	assert !luaMatches("axb", "a%.b");
+}
+
+test "every class letter, its upper-case negation and an escaped literal" {
+	assert luaMatches("aZ", "^%a%a$");
+	assert !luaMatches("1", "%a");
+	assert luaMatches("09", "^%d%d$");
+	assert luaMatches("x", "^%D$");
+	assert !luaMatches("5", "^%D$");
+	assert luaMatches("q", "^%l$");
+	assert !luaMatches("Q", "^%l$");
+	assert luaMatches("Q", "^%u$");
+	assert luaMatches("q", "^%U$");
+	assert luaMatches(" \t\r\n", "^%s+$");
+	assert !luaMatches("x", "%s");
+	assert luaMatches("a1", "^%w%w$");
+	assert !luaMatches("_", "^%w$");
+	assert luaMatches("fF9", "^%x+$");
+	assert !luaMatches("g", "^%x$");
+	assert luaMatches("!_~", "^%p+$");
+	assert !luaMatches("a", "^%p$");
+	assert luaMatches("\t", "^%c$");
+	assert !luaMatches(" ", "^%c$");
+	assert luaMatches("%-", "^%%%-$");
+	assert luaMatches("[x]", "^%[[%a]%]$");
 }
 
 test "a set may open with a bracket, escaped or not" {
