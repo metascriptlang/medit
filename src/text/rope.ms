@@ -152,7 +152,9 @@ function replaced(node: Node, from: int32, to: int32, text: string): Node[] {
 		pushAll(out, replaced(children[first], from - firstStart, sizes[first], text));
 		pushAll(out, replaced(children[last], 0, to - lastStart, ""));
 	}
-	pushAll(out, children[last + 1..children.length]);
+	// Parked: a slice of children breaks the web build,
+	// ~/metascript/.inbox/compiler/2026-09-26-interface-array-to-span-void-pointer.md
+	for (let k = last + 1; k < children.length; k++) { out.push(children[k]); }
 	return grouped(rebalanced(out));
 }
 
