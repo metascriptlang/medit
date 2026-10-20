@@ -1,4 +1,11 @@
-export const SAMPLE = `line 001  medic: một editor chạy trên Neon + Void, cuộn bằng wheel
+export const SAMPLE = `export function greet(name: string): string {
+	const hello = "xin chào 你好 👋";
+	if (name.length > 0) {
+		return \`\${hello}, \${name}\`;
+	}
+	return hello; // một dòng rất dài để thử soft wrap và cuộn ngang một dòng rất dài để thử soft wrap và cuộn ngang một dòng rất dài để thử soft wrap và cuộn ngang một dòng rất dài để thử soft wrap và cuộn ngang một dòng rất dài để thử soft wrap và cuộn ngang
+}
+line 001  medic: một editor chạy trên Neon + Void, cuộn bằng wheel
 line 002  medic: một editor chạy trên Neon + Void, cuộn bằng wheel
 line 003  medic: một editor chạy trên Neon + Void, cuộn bằng wheel
 line 004  medic: một editor chạy trên Neon + Void, cuộn bằng wheel

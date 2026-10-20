@@ -8,22 +8,29 @@ import { PixelRatio } from "../../../neon/src/api/pixelRatio";
 import { TextSpan } from "../../../neon/src/render/hostTypes";
 import { Void, View, Text, ViewHandle } from "../../../neon/src/components/primitives";
 import { Viewport } from "../view/viewport";
+import { VisualRow, cellIn, holds, offsetIn, rowIndexOf, rowText, rowsOf } from "../view/wrap";
 import { Document } from "../model/document";
 import { Editor } from "../model/editor";
 import { Clip, Command, Context, Gesture, commands, drag, insertText, press } from "../model/commands";
-import { columnOf, offsetAtColumn } from "../model/motion";
+import { cellsBetween } from "../model/motion";
 import { end, isEmpty, start } from "../model/selection";
 import { Outcome, defaultKeymap } from "../input/keymap";
 
 const BACKGROUND = "#1e1e2e";
 const FOREGROUND = "#cdd6f4";
 const SELECTION = "#45475a";
+const CURRENT_LINE = "#2a2b3c";
+const GUTTER = "#6c7086";
+const GUTTER_CURRENT = "#bac2de";
 const CARET = "#f5e0dc";
 const PADDING: number = 6;
 const FONT_SIZE: number = 14;
 const CARET_WIDTH: number = 2;
 const PROBE = "MMMMMMMMMM";
 const MULTI_CLICK_MS: number = 400;
+const BLINK_MS: number = 530;
+const MIN_DIGITS: int32 = 3;
+const GUTTER_GAP: int32 = 2;
 
 export struct Row {
 	spans: TextSpan[];
@@ -35,10 +42,6 @@ export struct Box {
 	w: number;
 	h: number;
 	color: string;
-}
-
-function rowOf(text: string): Row {
-	return { spans: [{ text, style: { color: FOREGROUND } }] };
 }
 
 function printable(text: string): boolean {
@@ -58,65 +61,143 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 	const table = commands();
 	const keymap = defaultKeymap();
 	let area: ViewHandle | null = null;
-	let view: Viewport = { top: 0, rows: 0, pending: 0 };
+	let view: Viewport = { line: 0, sub: 0, left: 0, rows: 0, cols: 0, pending: 0 };
+	let columns = 0;
+	let gutter = 0;
+	let wrap = false;
+	let frame: VisualRow[] = [];
 	let gesture: Gesture | null = null;
 	let lastPress = 0.0;
 	let lastOffset = -1;
 	let clicks = 0;
+	let blinkTimer: number = -1;
 	const [cellWidth, setCellWidth] = createSignal<number>(0);
 	const [rowHeight, setRowHeight] = createSignal<number>(0);
 	const [preedit, setPreedit] = createSignal<string>("");
 	const [composing, setComposing] = createSignal<boolean>(false);
 	const [caretX, setCaretX] = createSignal<number>(0);
 	const [caretY, setCaretY] = createSignal<number>(0);
+	const [blinkOn, setBlinkOn] = createSignal<boolean>(true);
 	const rows: List<Row> = createList<Row>([]);
 	const shades: List<Box> = createList<Box>([]);
 	const carets: List<Box> = createList<Box>([]);
 
-	const paint = (): void => {
+	const wrapWidth = (): int32 => wrap ? view.cols : 0;
+	const rowsIn = (line: int32): int32 => rowsOf(doc, line, wrapWidth()).length as int32;
+
+	function armBlink(): void {
+		blinkTimer = setTimeout((): void => {
+			setBlinkOn(!blinkOn());
+			armBlink();
+		}, BLINK_MS);
+	}
+
+	function restartBlink(): void {
+		if (blinkTimer >= 0) { clearTimeout(blinkTimer); }
+		setBlinkOn(true);
+		armBlink();
+	}
+
+	const fit = (): void => {
 		const count = doc.lineCount();
-		const lines: Row[] = [];
-		for (let i = 0; i < view.rows; i++) {
-			const line = view.top + i;
-			lines.push(rowOf(line < count ? doc.line(line) : ""));
+		gutter = Math.max(MIN_DIGITS, `${count}`.length as int32) + GUTTER_GAP;
+		if (view.cols != columns - gutter) { view = view.resized(view.rows, columns - gutter, count, rowsIn); }
+	};
+
+	const framed = (): VisualRow[] => {
+		const count = doc.lineCount();
+		const width = wrapWidth();
+		const out: VisualRow[] = [];
+		for (let line = view.line; line < count && (out.length as int32) < view.rows; line++) {
+			const lineRows = rowsOf(doc, line, width);
+			for (let k = line == view.line ? view.sub : 0; k < (lineRows.length as int32) && (out.length as int32) < view.rows; k++) {
+				out.push(lineRows[k]);
+			}
 		}
-		fill(rows, lines);
+		return out;
+	};
+
+	const paint = (): void => {
+		fit();
+		frame = framed();
 		const cw = cellWidth();
 		const rh = rowHeight();
-		const bottom = Math.min(view.top + view.rows, count) - 1;
+		const textX = gutter * cw;
+		const digits = gutter - GUTTER_GAP;
+		const ranges = editor.selections.ranges;
+		const head = ranges[editor.selections.primary].head;
+		const current = doc.lineOf(head);
+		const lines: Row[] = [];
+		for (const r of frame) {
+			const number = r.cell == 0 ? `${r.line + 1}`.padStart(digits, " ") : "".padStart(digits, " ");
+			lines.push({
+				spans: [
+					{ text: number + "".padStart(GUTTER_GAP, " "), style: { color: r.line == current ? GUTTER_CURRENT : GUTTER } },
+					{ text: rowText(doc, r, view.left, view.cols), style: { color: FOREGROUND } },
+				],
+			});
+		}
+		fill(rows, lines);
+		const band = (y: int32, from: int32, to: int32, color: string): Box | null => {
+			const lo = Math.max(from, view.left);
+			const hi = Math.min(to, view.left + view.cols);
+			if (hi <= lo) { return null; }
+			return { x: textX + (lo - view.left) * cw, y: y * rh, w: (hi - lo) * cw, h: rh, color };
+		};
+		const lit: Box[] = [];
 		const shaded: Box[] = [];
 		const placed: Box[] = [];
-		for (const s of editor.selections.ranges) {
-			const first = Math.max(doc.lineOf(s.start()), view.top);
-			const last = Math.min(doc.lineOf(s.end()), bottom);
-			for (let line = first; line <= last && !s.isEmpty(); line++) {
-				const from = Math.max(s.start(), doc.lineStart(line));
-				const to = Math.min(s.end(), doc.lineEnd(line));
-				const fromCol = columnOf(doc, from);
-				const wraps = s.end() > doc.lineEnd(line) ? 1 : 0;
-				const width = columnOf(doc, to) - fromCol + wraps;
-				if (width > 0) { shaded.push({ x: fromCol * cw, y: (line - view.top) * rh, w: width * cw, h: rh, color: SELECTION }); }
-			}
-			const line = doc.lineOf(s.head);
-			if (line >= view.top && line <= bottom) {
-				placed.push({ x: columnOf(doc, s.head) * cw, y: (line - view.top) * rh, w: CARET_WIDTH, h: rh, color: CARET });
+		const top = frame.length > 0 ? frame[0].from : 0;
+		const bottom = frame.length > 0 ? frame[frame.length - 1].to : 0;
+		for (const s of ranges) {
+			if (s.end() < top || s.start() > bottom + 1) { continue; }
+			for (let i = 0; i < (frame.length as int32); i++) {
+				const r = frame[i];
+				if (r.holds(s.head)) {
+					const cell = cellIn(doc, r, s.head) - view.left;
+					if (cell >= 0 && cell <= view.cols) {
+						placed.push({ x: textX + cell * cw, y: i * rh, w: CARET_WIDTH, h: rh, color: CARET });
+					}
+					if (s.isEmpty()) { lit.push({ x: textX, y: i * rh, w: view.cols * cw, h: rh, color: CURRENT_LINE }); }
+					if (s.head == head) {
+						setCaretX(textX + Math.max(0, cell) * cw);
+						setCaretY(i * rh);
+					}
+				}
+				const lo = Math.max(s.start(), r.from);
+				const hi = Math.min(s.end(), r.to);
+				const newline = r.last && s.start() <= r.to && s.end() > r.to;
+				if (lo < hi || (newline && lo <= hi)) {
+					const from = cellIn(doc, r, lo);
+					const to = from + cellsBetween(doc, lo, hi, r.cell + from) + (newline ? 1 : 0);
+					const b = band(i, from, to, SELECTION);
+					if (b !== null) { shaded.push(b as Box); }
+				}
 			}
 		}
-		fill(shades, shaded);
+		fill(shades, lit.concat(shaded));
 		fill(carets, placed);
-		const head = editor.selections.ranges[editor.selections.primary].head;
-		setCaretX(columnOf(doc, head) * cw);
-		setCaretY((doc.lineOf(head) - view.top) * rh);
+		restartBlink();
 	};
 
 	const reveal = (): void => {
+		fit();
 		const head = editor.selections.ranges[editor.selections.primary].head;
-		view = view.revealed(doc.lineOf(head), doc.lineCount());
+		const line = doc.lineOf(head);
+		const lineRows = rowsOf(doc, line, wrapWidth());
+		const k = rowIndexOf(lineRows, head);
+		view = view.revealed(line, k, doc.lineCount(), rowsIn);
+		if (!wrap) { view = view.revealedCell(cellIn(doc, lineRows[k], head)); }
 		paint();
 	};
 
 	const cx: Context = {
 		pageRows: (): int32 => Math.max(1, view.rows - 1),
+		wrapWidth,
+		toggleWrap: (): void => {
+			wrap = !wrap;
+			view = { ...view, sub: 0, left: 0 };
+		},
 		clip: {
 			write: clip.write,
 			read: (done: (text: string) => void): void => {
@@ -145,8 +226,11 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 		}
 		setCellWidth(cellPx / ratio);
 		setRowHeight(rowPx / ratio);
+		columns = Math.floor(PixelRatio.getPixelSizeForLayoutSize(e.width) / cellPx) as int32;
 		const heightPx = PixelRatio.getPixelSizeForLayoutSize(e.height);
-		view = view.resized(Math.floor(heightPx / rowPx) as int32, doc.lineCount());
+		view = { ...view, rows: Math.max(1, Math.floor(heightPx / rowPx) as int32) };
+		fit();
+		view = view.resized(view.rows, view.cols, doc.lineCount(), rowsIn);
 		paint();
 	};
 
@@ -183,11 +267,10 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 	};
 
 	const offsetAt = (e: NeonEvent): int32 => {
-		const rh = rowHeight();
-		const cw = cellWidth();
-		const line = view.top + (Math.floor(Math.max(0, e.locationY) / rh) as int32);
-		if (line >= doc.lineCount()) { return doc.length(); }
-		return offsetAtColumn(doc, line, Math.round(Math.max(0, e.locationX) / cw) as int32);
+		const i = Math.floor(Math.max(0, e.locationY) / rowHeight()) as int32;
+		if (frame.length == 0 || i >= (frame.length as int32)) { return doc.length(); }
+		const cell = Math.round((Math.max(0, e.locationX) - gutter * cellWidth()) / cellWidth()) as int32;
+		return offsetIn(doc, frame[i], view.left + Math.max(0, cell));
 	};
 
 	const pressed = (e: NeonEvent): void => {
@@ -208,9 +291,18 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 		reveal();
 	};
 
+	const widest = (): int32 => {
+		let most = 0;
+		for (const r of frame) { most = Math.max(most, cellIn(doc, r, r.to)); }
+		return most;
+	};
+
 	const wheeled = (e: NeonEvent): void => {
-		const next = view.wheeled(e.deltaY, doc.lineCount());
-		const moved = next.top != view.top;
+		const sideways = e.deltaX != 0 ? e.deltaX : e.shiftKey ? -e.deltaY : 0;
+		const next = sideways != 0
+			? (wrap ? view : view.slid(sideways, widest()))
+			: view.wheeled(e.deltaY, doc.lineCount(), rowsIn);
+		const moved = next.line != view.line || next.sub != view.sub || next.left != view.left;
 		view = next;
 		if (moved) { paint(); }
 	};
@@ -236,6 +328,17 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 		);
 	};
 
+	const caret = (item: Accessor<Box>): NeonNode => {
+		return element(
+			<View
+				style={{
+					position: "absolute", left: item().x, top: item().y, width: item().w, height: item().h,
+					backgroundColor: item().color, opacity: blinkOn() ? 1 : 0, pointerEvents: "none",
+				}}
+			/>
+		);
+	};
+
 	return element(
 		<Void style={{ backgroundColor: BACKGROUND, padding: PADDING }}>
 			<View
@@ -256,7 +359,7 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 				onWheel={wheeled}>
 				{ForList<Box>({ each: shades, children: box })}
 				{ForList<Row>({ each: rows, children: lineRow })}
-				{ForList<Box>({ each: carets, children: box })}
+				{ForList<Box>({ each: carets, children: caret })}
 				{Show({
 					when: composing,
 					children: element(

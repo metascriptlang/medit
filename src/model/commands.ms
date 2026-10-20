@@ -12,6 +12,7 @@ import {
 	wordRight,
 } from "./motion";
 import { Sel, cursorAt, single, span } from "./selection";
+import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const TAB: int32 = 9;
 const SPACE: int32 = 32;
@@ -24,6 +25,8 @@ export interface Clip {
 
 export interface Context {
 	pageRows: () => int32;
+	wrapWidth: () => int32;
+	toggleWrap: () => void;
 	clip: Clip;
 }
 
@@ -45,17 +48,35 @@ function stepped(e: Editor, extend: boolean, toStart: boolean, by: (doc: Documen
 	});
 }
 
-function vertical(e: Editor, extend: boolean, rows: int32): void {
+function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 	const doc = e.doc;
+	const width = cx.wrapWidth();
 	const last = doc.lineCount() - 1;
 	const next: Sel[] = [];
 	for (const s of e.selections.ranges) {
-		const goal = s.goal !== null ? s.goal as int32 : columnOf(doc, s.head);
-		const line = doc.lineOf(s.head) + rows;
-		let head = 0;
-		if (line < 0) { head = 0; }
-		else if (line > last) { head = doc.length(); }
-		else { head = offsetAtColumn(doc, line, goal); }
+		let line = doc.lineOf(s.head);
+		let lineRows = rowsOf(doc, line, width);
+		let k = rowIndexOf(lineRows, s.head);
+		const goal = s.goal !== null ? s.goal as int32 : cellIn(doc, lineRows[k], s.head);
+		k += rows;
+		let head = -1;
+		while (head < 0 && k < 0) {
+			if (line == 0) { head = 0; }
+			else {
+				line -= 1;
+				lineRows = rowsOf(doc, line, width);
+				k += lineRows.length as int32;
+			}
+		}
+		while (head < 0 && k >= (lineRows.length as int32)) {
+			if (line == last) { head = doc.length(); }
+			else {
+				k -= lineRows.length as int32;
+				line += 1;
+				lineRows = rowsOf(doc, line, width);
+			}
+		}
+		if (head < 0) { head = offsetIn(doc, lineRows[k], goal); }
 		next.push({ anchor: extend ? s.anchor : head, head, goal });
 	}
 	e.select({ ranges: next, primary: e.selections.primary });
@@ -272,14 +293,14 @@ export function commands(): Map<string, Command> {
 	m.set("right", (e: Editor, cx: Context): void => { stepped(e, false, false, nextCluster); });
 	m.set("selectLeft", (e: Editor, cx: Context): void => { stepped(e, true, true, prevCluster); });
 	m.set("selectRight", (e: Editor, cx: Context): void => { stepped(e, true, false, nextCluster); });
-	m.set("up", (e: Editor, cx: Context): void => { vertical(e, false, -1); });
-	m.set("down", (e: Editor, cx: Context): void => { vertical(e, false, 1); });
-	m.set("selectUp", (e: Editor, cx: Context): void => { vertical(e, true, -1); });
-	m.set("selectDown", (e: Editor, cx: Context): void => { vertical(e, true, 1); });
-	m.set("pageUp", (e: Editor, cx: Context): void => { vertical(e, false, -cx.pageRows()); });
-	m.set("pageDown", (e: Editor, cx: Context): void => { vertical(e, false, cx.pageRows()); });
-	m.set("selectPageUp", (e: Editor, cx: Context): void => { vertical(e, true, -cx.pageRows()); });
-	m.set("selectPageDown", (e: Editor, cx: Context): void => { vertical(e, true, cx.pageRows()); });
+	m.set("up", (e: Editor, cx: Context): void => { vertical(e, cx, false, -1); });
+	m.set("down", (e: Editor, cx: Context): void => { vertical(e, cx, false, 1); });
+	m.set("selectUp", (e: Editor, cx: Context): void => { vertical(e, cx, true, -1); });
+	m.set("selectDown", (e: Editor, cx: Context): void => { vertical(e, cx, true, 1); });
+	m.set("pageUp", (e: Editor, cx: Context): void => { vertical(e, cx, false, -cx.pageRows()); });
+	m.set("pageDown", (e: Editor, cx: Context): void => { vertical(e, cx, false, cx.pageRows()); });
+	m.set("selectPageUp", (e: Editor, cx: Context): void => { vertical(e, cx, true, -cx.pageRows()); });
+	m.set("selectPageDown", (e: Editor, cx: Context): void => { vertical(e, cx, true, cx.pageRows()); });
 	m.set("wordLeft", (e: Editor, cx: Context): void => { moved(e, false, wordLeftOf); });
 	m.set("wordRight", (e: Editor, cx: Context): void => { moved(e, false, wordRightOf); });
 	m.set("selectWordLeft", (e: Editor, cx: Context): void => { moved(e, true, wordLeftOf); });
@@ -321,6 +342,7 @@ export function commands(): Map<string, Command> {
 	m.set("redo", (e: Editor, cx: Context): void => { const _r = e.redo(); });
 	m.set("copy", copy);
 	m.set("cut", cut);
+	m.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
 	m.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -390,8 +412,11 @@ function heads(e: Editor): string {
 function runner(): (e: Editor, name: string) => void {
 	const table = commands();
 	let clipboard = "";
+	let wrap = 0;
 	const cx: Context = {
 		pageRows: (): int32 => 2,
+		wrapWidth: (): int32 => wrap,
+		toggleWrap: (): void => { wrap = wrap == 0 ? 8 : 0; },
 		clip: {
 			write: (text: string): void => { clipboard = text; },
 			read: (done: (text: string) => void): void => { done(clipboard); },
@@ -425,6 +450,25 @@ test "up and down keep the goal column across a short line" {
 	run(e, "up");
 	run(e, "up");
 	assert heads(e) == "5";
+	run(e, "up");
+	assert heads(e) == "0";
+}
+
+test "up and down move by wrapped rows and keep the cell within the row" {
+	const run = runner();
+	const e = editorAt("one two three four
+ab", [2]);
+	run(e, "toggleWrap");
+	run(e, "down");
+	assert heads(e) == "10";
+	run(e, "down");
+	assert heads(e) == "16";
+	run(e, "down");
+	assert heads(e) == "21";
+	run(e, "up");
+	run(e, "up");
+	assert heads(e) == "10";
+	run(e, "toggleWrap");
 	run(e, "up");
 	assert heads(e) == "0";
 }
