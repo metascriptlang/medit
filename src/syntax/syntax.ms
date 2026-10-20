@@ -8,6 +8,7 @@
 
 import { Handle } from "std/ffi";
 import { Document } from "../model/document";
+import { isTrail } from "../text/clusters";
 import { HIGHLIGHTS } from "./highlights";
 import { luaMatches } from "./luaPattern";
 import { Tone } from "../view/tone";
@@ -71,7 +72,7 @@ function read(source: Ptr<void>, syntax: Ptr<void>, byte: int32): void {
 	const total = doc.length();
 	if (byte >= total) { return; }
 	let to = Math.min(total, byte + CHUNK);
-	while (to > byte + 1 && to < total && (doc.byteAt(to) & 0xC0) == 0x80) { to -= 1; }
+	while (to > byte + 1 && to < total && isTrail(doc.byteAt(to))) { to -= 1; }
 	const text = doc.slice(byte, to);
 	syntaxFill(syntax, text.asBytes());
 }

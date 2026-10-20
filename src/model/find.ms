@@ -1,10 +1,9 @@
 import { Bias, Document, Edit } from "./document";
 import { Editor, mapThrough } from "./editor";
 import { end, primaryRange, single, span, start } from "./selection";
+import { isTrail } from "../text/clusters";
 
 const WINDOW: int32 = 64 * 1024;
-
-function isTrail(byte: int32): boolean { return (byte & 0xC0) == 0x80; }
 
 function forwardToBoundary(this doc: Document, at: int32): int32 {
 	let boundary = at;
