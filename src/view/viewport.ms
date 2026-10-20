@@ -1,5 +1,8 @@
 export const ROWS_PER_NOTCH: float64 = 3;
 export const COLS_PER_NOTCH: float64 = 6;
+const DRAG_SCROLL_MAX_ROWS: float64 = 3;
+const DRAG_SCROLL_EASE: float64 = 1.2;
+const DRAG_SCROLL_PX_PER_ROW: float64 = 100;
 
 export type RowCount = (line: int32) => int32;
 
@@ -34,15 +37,34 @@ export function scrolledBy(
 	return { ...v, line, sub: Math.max(0, Math.min(sub, here - 1)) };
 }
 
+export function nudged(
+	this v: Viewport,
+	rows: float64,
+	lineCount: int32,
+	rowsIn: RowCount,
+): Viewport {
+	const total = v.pending + rows;
+	const whole = total as int32;
+	return { ...v.scrolledBy(whole, lineCount, rowsIn), pending: total - whole };
+}
+
+export function dragScrollRows(y: float64, height: float64, rowHeight: float64): float64 {
+	const margin = Math.min(rowHeight, height / 3);
+	const beyond = y < margin ? y - margin : y > height - margin ? y - (height - margin) : 0;
+	const rows = Math.min(
+		Math.pow(Math.abs(beyond), DRAG_SCROLL_EASE) / DRAG_SCROLL_PX_PER_ROW,
+		DRAG_SCROLL_MAX_ROWS,
+	);
+	return beyond < 0 ? -rows : rows;
+}
+
 export function wheeled(
 	this v: Viewport,
 	notches: float64,
 	lineCount: int32,
 	rowsIn: RowCount,
 ): Viewport {
-	const total = v.pending - notches * ROWS_PER_NOTCH;
-	const whole = total as int32;
-	return { ...v.scrolledBy(whole, lineCount, rowsIn), pending: total - whole };
+	return v.nudged(-notches * ROWS_PER_NOTCH, lineCount, rowsIn);
 }
 
 export function slid(this v: Viewport, notches: float64, widest: int32): Viewport {
@@ -150,4 +172,14 @@ test "a cell is revealed by sliding the left edge" {
 	assert v.slid(-1, 100).left == 0;
 	assert v.slid(2, 100).left == 12;
 	assert v.slid(50, 30).left == 21;
+}
+
+test "a drag scrolls only past a one-row margin, faster the farther it goes, at most three rows" {
+	assert dragScrollRows(300, 600, 20) == 0;
+	assert dragScrollRows(575, 600, 20) == 0;
+	const hundredPast = dragScrollRows(680, 600, 20);
+	assert hundredPast > 2.5 && hundredPast < 2.52;
+	assert dragScrollRows(10, 600, 20) < 0;
+	assert dragScrollRows(-2000, 600, 20) == -3;
+	assert dragScrollRows(700, 600, 20) > dragScrollRows(650, 600, 20);
 }
