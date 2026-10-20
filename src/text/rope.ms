@@ -128,33 +128,33 @@ function pushAll(out: Node[], nodes: Span<Node>): void {
 	for (let k = 0; k < nodes.length; k++) { out.push(nodes[k]); }
 }
 
+function childHolding(sizes: Span<int32>, offset: int32): [int32, int32] {
+	let child = 0;
+	let start = 0;
+	while (child + 1 < sizes.length && offset > start + sizes[child]) {
+		start += sizes[child];
+		child += 1;
+	}
+	return [child, start];
+}
+
 function replaced(node: Node, from: int32, to: int32, text: string): Node[] {
 	if (node.height == 0) {
 		const body = node.text;
 		return leavesOf(body.byteSlice(0, from) + text + body.byteSlice(to, node.bytes), false);
 	}
-	const kids = node.children;
+	const children = node.children;
 	const sizes = node.sizes;
-	let i = 0;
-	let start = 0;
-	while (i + 1 < sizes.length && from > start + sizes[i]) {
-		start += sizes[i];
-		i += 1;
-	}
-	let j = i;
-	let startJ = start;
-	while (j + 1 < sizes.length && to > startJ + sizes[j]) {
-		startJ += sizes[j];
-		j += 1;
-	}
-	const out: Node[] = kids.slice(0, i);
-	if (i == j) {
-		pushAll(out, replaced(kids[i], from - start, to - start, text));
+	const [first, firstStart] = childHolding(sizes, from);
+	const [last, lastStart] = childHolding(sizes, to);
+	const out = children.slice(0, first);
+	if (first == last) {
+		pushAll(out, replaced(children[first], from - firstStart, to - firstStart, text));
 	} else {
-		pushAll(out, replaced(kids[i], from - start, sizes[i], text));
-		pushAll(out, replaced(kids[j], 0, to - startJ, ""));
+		pushAll(out, replaced(children[first], from - firstStart, sizes[first], text));
+		pushAll(out, replaced(children[last], 0, to - lastStart, ""));
 	}
-	pushAll(out, kids[j + 1..kids.length]);
+	pushAll(out, children[last + 1..children.length]);
 	return grouped(rebalanced(out));
 }
 
