@@ -19,30 +19,31 @@ export struct Resolution {
 }
 
 export function chordOf(k: KeyPress): string {
-	const key = k.key == " " ? "Space" : k.key.length == 1 ? k.key.toLowerCase() : k.key;
-	return (k.ctrl ? "ctrl+" : "") + (k.alt ? "alt+" : "") + (k.shift ? "shift+" : "") + (k.meta ? "meta+" : "") + key;
+	const key = match (k.key) {
+		" " => "Space",
+		_ when k.key.length == 1 => k.key.toLowerCase(),
+		_ => k.key,
+	};
+	return (k.ctrl ? "ctrl+" : "") + (k.alt ? "alt+" : "") + (k.shift ? "shift+" : "") +
+		(k.meta ? "meta+" : "") + key;
 }
 
 export class Keymap {
-	private bindings: Map<string, string>;
-	private prefixes: Map<string, boolean>;
-	private pending: string;
-
-	constructor() {
-		this.bindings = new Map<string, string>();
-		this.prefixes = new Map<string, boolean>();
-		this.pending = "";
-	}
+	private bindings: Map<string, string> = new Map<string, string>();
+	private prefixes: Set<string> = new Set<string>();
+	private pending: string = "";
 
 	bind(sequence: string, command: string): void {
-		const chords = sequence.split(" ");
-		let prefix = "";
-		for (let i = 0; i + 1 < chords.length; i++) {
-			prefix = prefix == "" ? chords[i] : `${prefix} ${chords[i]}`;
+		let space = sequence.indexOf(" ");
+		while (space >= 0) {
+			const prefix = sequence.slice(0, space);
 			if (this.bindings.has(prefix)) {
-				throw new Error(`Keymap.bind: "${sequence}" extends "${prefix}", which is bound already`);
+				throw new Error(
+					`Keymap.bind: "${sequence}" extends "${prefix}", which is bound already`,
+				);
 			}
-			this.prefixes.set(prefix, true);
+			this.prefixes.add(prefix);
+			space = sequence.indexOf(" ", space + 1);
 		}
 		if (this.prefixes.has(sequence)) {
 			throw new Error(`Keymap.bind: "${sequence}" is a prefix of a longer binding`);
@@ -56,7 +57,7 @@ export class Keymap {
 		const command = this.bindings.get(sequence);
 		if (command !== undefined) {
 			this.pending = "";
-			return { outcome: Outcome.Run, command: command as string };
+			return { outcome: Outcome.Run, command };
 		}
 		if (this.prefixes.has(sequence)) {
 			this.pending = sequence;
@@ -71,8 +72,8 @@ export class Keymap {
 }
 
 export function defaultKeymap(): Keymap {
-	const m = new Keymap();
-	const pairs: string[][] = [
+	const keymap = new Keymap();
+	const bindings: Array<[string, string]> = [
 		["ArrowLeft", "left"], ["ArrowRight", "right"], ["ArrowUp", "up"], ["ArrowDown", "down"],
 		["shift+ArrowLeft", "selectLeft"], ["shift+ArrowRight", "selectRight"],
 		["shift+ArrowUp", "selectUp"], ["shift+ArrowDown", "selectDown"],
@@ -95,8 +96,8 @@ export function defaultKeymap(): Keymap {
 		["ctrl+f", "find"], ["ctrl+h", "replace"], ["F3", "findNext"], ["shift+F3", "findPrev"],
 		["ctrl+Insert", "copy"], ["shift+Delete", "cut"], ["shift+Insert", "paste"],
 	];
-	for (const p of pairs) { m.bind(p[0], p[1]); }
-	return m;
+	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
+	return keymap;
 }
 
 function press(key: string, ctrl: boolean, shift: boolean): KeyPress {
@@ -121,6 +122,17 @@ test "a sequence waits on its prefix, runs when complete, and a wrong key cancel
 	const _again = m.feed(press("k", true, false));
 	assert m.feed(press("q", false, false)).outcome == Outcome.Cancelled;
 	assert m.feed(press("q", false, false)).outcome == Outcome.Unbound;
+}
+
+test "a three-chord sequence waits on both of its prefixes" {
+	const m = new Keymap();
+	m.bind("a b c", "abc");
+	assert m.feed(press("a", false, false)).outcome == Outcome.Pending;
+	assert m.feed(press("b", false, false)).outcome == Outcome.Pending;
+	assert m.pendingChords() == "a b";
+	const done = m.feed(press("c", false, false));
+	assert done.outcome == Outcome.Run && done.command == "abc";
+	assert m.pendingChords() == "";
 }
 
 test "binding over a prefix or under a binding is refused" {
