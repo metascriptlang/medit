@@ -195,4 +195,7 @@ test "row text expands tabs, pads wide clusters and shows control characters" {
 	assert rowText(d, rows[0], 1, 4) == "   b";
 	assert rowText(d, rows[0], 6, 3) == " ␁␡";
 	assert rowText(d, rows[0], 0, 6) == "a   b ";
+	const lone = new Document("a\rb\r\n");
+	assert lone.lineCount() == 2;
+	assert rowText(lone, rowsOf(lone, 0, 0)[0], 0, 5) == "a␍b";
 }
