@@ -2,6 +2,7 @@ import { Anchor, Bias, Change, Document, Edit, mapOffset } from "./document";
 import { Sel, Selections, cursorAt, normalized, sameSelections, single, span } from "./selection";
 
 export struct Step {
+	id: int32;
 	edits: Edit[];
 	before: Selections;
 	after: Selections;
@@ -34,6 +35,8 @@ export class Editor {
 	private pendingBefore: Selections = single(0);
 	private group: string = "";
 	private lastGroup: string = "";
+	private steps: int32 = 0;
+	private savedStep: int32 = 0;
 
 	constructor(doc: Document) {
 		this.doc = doc;
@@ -119,7 +122,9 @@ export class Editor {
 			for (const e of this.pending) { this.undos[last].edits.push(e); }
 			this.undos[last].after = this.selections;
 		} else {
+			this.steps += 1;
 			this.undos.push({
+				id: this.steps,
 				edits: this.pending,
 				before: this.pendingBefore,
 				after: this.selections,
@@ -180,6 +185,17 @@ export class Editor {
 		this.replaceEach(texts);
 	}
 
+	private topStep(): int32 {
+		return this.undos.length == 0 ? 0 : this.undos[this.undos.length - 1].id;
+	}
+
+	markSaved(): void {
+		this.savedStep = this.topStep();
+		this.lastGroup = "";
+	}
+
+	isDirty(): boolean { return this.topStep() != this.savedStep; }
+
 	canUndo(): boolean { return this.undos.length > 0; }
 	canRedo(): boolean { return this.redos.length > 0; }
 	undo(): boolean { return this.travel(this.undos, this.redos, "undo"); }
@@ -193,7 +209,7 @@ export class Editor {
 		for (let i = step.edits.length - 1; i >= 0; i--) {
 			inverses.push(this.doc.splice(step.edits[i]));
 		}
-		into.push({ edits: inverses, before: step.after, after: step.before });
+		into.push({ id: step.id, edits: inverses, before: step.after, after: step.before });
 		this.selections = step.before;
 		this.keepAutoclosed();
 		this.lastGroup = "";
@@ -318,6 +334,28 @@ test "typing in one place coalesces into one step until the cursor moves" {
 	assert e.undo();
 	assert e.doc.text() == "";
 	assert e.selections.ranges[0].head == 0;
+}
+
+test "the editor is clean at the step it was saved at, through undo and redo" {
+	const e = editorWith("", [0]);
+	assert !e.isDirty();
+	typed(e, "a");
+	assert e.isDirty();
+	e.markSaved();
+	assert !e.isDirty();
+	typed(e, "b");
+	assert e.isDirty();
+	assert e.undo();
+	assert !e.isDirty();
+	assert e.undo();
+	assert e.isDirty();
+	assert e.redo();
+	assert !e.isDirty();
+	assert e.undo();
+	typed(e, "c");
+	assert e.isDirty();
+	assert e.undo();
+	assert e.isDirty();
 }
 
 test "edits at several places shift by what came before" {

@@ -29,7 +29,7 @@ export interface Context {
 	wrapWidth: () => int32;
 	toggleWrap: () => void;
 	clip: Clip;
-	save: (text: string) => void;
+	save: (text: string) => string | null;
 	findBar: (replace: boolean) => void;
 	findAgain: (backwards: boolean) => void;
 }
@@ -611,7 +611,9 @@ export function commands(): Map<string, Command> {
 	table.set("copy", copy);
 	table.set("cut", cut);
 	table.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
-	table.set("save", (e: Editor, cx: Context): void => { cx.save(e.doc.fileText()); });
+	table.set("save", (e: Editor, cx: Context): void => {
+		if (cx.save(e.doc.fileText()) === null) { e.markSaved(); }
+	});
 	table.set("find", (e: Editor, cx: Context): void => { cx.findBar(false); });
 	table.set("replace", (e: Editor, cx: Context): void => { cx.findBar(true); });
 	table.set("findNext", (e: Editor, cx: Context): void => { cx.findAgain(false); });
@@ -676,7 +678,7 @@ function heads(e: Editor): string {
 	return parts.join(",");
 }
 
-function runner(saved: string[] = []): (e: Editor, name: string) => void {
+function runner(saved: string[] = [], refusal: string | null = null): (e: Editor, name: string) => void {
 	const table = commands();
 	let clipboard = "";
 	let wrap = 0;
@@ -688,7 +690,10 @@ function runner(saved: string[] = []): (e: Editor, name: string) => void {
 			write: (text: string): void => { clipboard = text; },
 			read: (done: (text: string) => void): void => { done(clipboard); },
 		},
-		save: (text: string): void => { saved.push(text); },
+		save: (text: string): string | null => {
+			saved.push(text);
+			return refusal;
+		},
 		findBar: (replace: boolean): void => {},
 		findAgain: (backwards: boolean): void => {},
 	};
@@ -808,6 +813,15 @@ b", [1]);
 	assert saved[0] == "a
 
 b";
+}
+
+test "a save leaves the editor clean only when the file was written" {
+	const e = editorAt("a", [1]);
+	runner([], "disk full")(e, "newline");
+	runner([], "disk full")(e, "save");
+	assert e.isDirty();
+	runner()(e, "save");
+	assert !e.isDirty();
 }
 
 test "typed letters undo as one word" {
