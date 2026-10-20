@@ -55,8 +55,9 @@ Run from the repository root: fonts are loaded by relative path.
 - Open cost: `msc run --release scripts/openBench.ms -- <megabytes>` times the document build, a
   scroll frame, a keystroke, a find over the whole file and a save's file text on generated text,
   and exits 1 when one of the first three passes its `*_BUDGET_*` constant. At 100 MB on
-  2026-10-20: document 281 ms, scroll frame 110 us, keystroke 10 us, find of 1.28 M matches 165 ms,
-  file text 490 ms.
+  2026-10-20: document 281 ms, scroll frame 110 us, keystroke 10 us, file text 490 ms. Find of
+  1.28 M matches on 2026-10-21: 113 ms exact, 269 ms ignoring case and taking whole words; the find
+  bar counts every match on each keystroke, so these are its per-keystroke cost at that size.
 - Highlight cost: `msc run --release scripts/syntaxBench.ms -- <file>` times the first parse, a
   keystroke's reparse at three places and the tones of 40 lines.
 - Web (`runCanvas`, `--os=emcc`): `sh scripts/buildWeb.sh [gl] [wgpu]` writes `out/web/`; serve
