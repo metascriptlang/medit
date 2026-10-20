@@ -98,6 +98,16 @@ export function revealed(
 	return target.scrolledBy(1 - v.rows, lineCount, rowsIn);
 }
 
+export function centered(
+	this v: Viewport,
+	line: int32,
+	lineCount: int32,
+	rowsIn: RowCount,
+): Viewport {
+	const target: Viewport = { ...v, line, sub: 0, pending: 0 };
+	return target.scrolledBy(-(v.rows / 2), lineCount, rowsIn);
+}
+
 export function revealedCell(this v: Viewport, cell: int32): Viewport {
 	if (cell < v.left) { return { ...v, left: cell }; }
 	if (cell >= v.left + v.cols) { return { ...v, left: cell - v.cols + 1 }; }
@@ -182,4 +192,12 @@ test "a drag scrolls only past a one-row margin, faster the farther it goes, at 
 	assert dragScrollRows(10, 600, 20) < 0;
 	assert dragScrollRows(-2000, 600, 20) == -3;
 	assert dragScrollRows(700, 600, 20) > dragScrollRows(650, 600, 20);
+}
+
+test "a centered line sits in the middle row, or as low as the top allows" {
+	const one = (line: int32): int32 => 1;
+	const v: Viewport = { line: 0, sub: 0, left: 0, rows: 10, cols: 80, pending: 0 };
+	assert v.centered(50, 100, one).line == 45;
+	assert v.centered(2, 100, one).line == 0;
+	assert v.centered(99, 100, one).line == 94;
 }

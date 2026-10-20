@@ -1,5 +1,6 @@
 import { Document } from "../model/document";
-import { Selections, cursorAt, primaryRange, span } from "../model/selection";
+import { LineTarget, targetLine } from "../model/goto";
+import { Selections, cursorAt, primaryRange, single, span } from "../model/selection";
 import { cellsIn, isTrail, nextClusterIn } from "../text/clusters";
 
 const ELLIPSIS = "…";
@@ -44,6 +45,19 @@ export function statusLine(left: string, right: string, cols: int32): string {
 	return shown + " ".repeat(Math.max(1, cols - cellsOf(shown) - cellsOf(right))) + right;
 }
 
+export function goToHelp(doc: Document, selections: Selections, t: LineTarget | null): string {
+	if (t === null) {
+		const place = caretPlace(doc, single(selections.primaryRange().head)).split(":");
+		return `Current line ${place[0]} of ${doc.lineCount()}, character ${place[1]}`;
+	}
+	const target = t as LineTarget;
+	const line = doc.targetLine(target) + 1;
+	if (target.relative != 0) {
+		return `Go to line ${line} (${target.relative > 0 ? "+" : ""}${target.relative} from current)`;
+	}
+	return target.character > 0 ? `Go to line ${line}, character ${target.character}` : `Go to line ${line}`;
+}
+
 function placeIn(text: string, ranges: Selections): string {
 	return caretPlace(new Document(text), ranges);
 }
@@ -64,4 +78,16 @@ test "the left side gives way from its start so the right side stays whole" {
 	assert statusLine("a.ms", "1:1", 10) == "a.ms   1:1";
 	assert statusLine("dir/file.ms", "1:1", 10) == "…le.ms 1:1";
 	assert statusLine("dir/file.ms", "1:1", 3) == "… 1:1";
+}
+
+test "the go-to help names the target line, or the current one when there is none" {
+	const doc = new Document("a
+bc
+d");
+	const at = single(3);
+	assert goToHelp(doc, at, null) == "Current line 2 of 3, character 2";
+	assert goToHelp(doc, at, { line: 9, character: 0, relative: 0 }) == "Go to line 3";
+	assert goToHelp(doc, at, { line: 1, character: 4, relative: 0 }) == "Go to line 1, character 4";
+	assert goToHelp(doc, at, { line: 1, character: 0, relative: -1 }) == "Go to line 1 (-1 from current)";
+	assert goToHelp(doc, at, { line: 3, character: 0, relative: 1 }) == "Go to line 3 (+1 from current)";
 }
