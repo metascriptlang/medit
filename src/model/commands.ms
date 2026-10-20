@@ -100,27 +100,22 @@ function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 	reselect(e, (s: Sel): Sel => {
 		let line = doc.lineOf(s.head);
 		let lineRows = rowsOf(doc, line, width);
-		let k = rowIndexOf(lineRows, s.head);
-		const goal = s.goal !== null ? s.goal as int32 : cellIn(doc, lineRows[k], s.head);
-		k += rows;
-		let head = -1;
-		while (head < 0 && k < 0) {
-			if (line == 0) { head = 0; }
-			else {
-				line -= 1;
-				lineRows = rowsOf(doc, line, width);
-				k += lineRows.length as int32;
-			}
+		let row = rowIndexOf(lineRows, s.head);
+		const goal = s.goal !== null ? s.goal as int32 : cellIn(doc, lineRows[row], s.head);
+		row += rows;
+		while (row < 0 && line > 0) {
+			line -= 1;
+			lineRows = rowsOf(doc, line, width);
+			row += lineRows.length as int32;
 		}
-		while (head < 0 && k >= (lineRows.length as int32)) {
-			if (line == last) { head = doc.length(); }
-			else {
-				k -= lineRows.length as int32;
-				line += 1;
-				lineRows = rowsOf(doc, line, width);
-			}
+		while (row >= (lineRows.length as int32) && line < last) {
+			row -= lineRows.length as int32;
+			line += 1;
+			lineRows = rowsOf(doc, line, width);
 		}
-		if (head < 0) { head = offsetIn(doc, lineRows[k], goal); }
+		let head = 0;
+		if (row >= (lineRows.length as int32)) { head = doc.length(); }
+		else if (row >= 0) { head = offsetIn(doc, lineRows[row], goal); }
 		return { anchor: extend ? s.anchor : head, head, goal };
 	});
 }
