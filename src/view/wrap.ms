@@ -20,9 +20,9 @@ export struct VisualRow {
 	last: boolean;
 }
 
-export function rowsOf(doc: Document, line: int32, width: int32): VisualRow[] {
+export function rowsOf(doc: Document, line: int32, width: int32): Vec<VisualRow> {
 	const start = doc.lineStart(line);
-	const rows: VisualRow[] = [];
+	let rows: Vec<VisualRow> = [];
 	if (width <= 0) {
 		rows.push({ line, from: start, to: doc.lineEnd(line), cell: 0, last: true });
 		return rows;
@@ -90,8 +90,8 @@ export function rowPieces(
 	cols: int32,
 	tones: Readonly<Span<Tone>>,
 	base: int32,
-): Piece[] {
-	const pieces: Piece[] = [];
+): Vec<Piece> {
+	let pieces: Vec<Piece> = [];
 	let out: uint8[] = [];
 	let tone = Tone.Plain;
 	const text = doc.slice(r.from, r.to);
