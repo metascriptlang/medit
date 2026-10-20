@@ -19,4 +19,4 @@ const appClip: Clip = {
 };
 
 const opts: CanvasOptions = { ...canvasOptions(960, 640), font: FONT_PATH };
-exit(runCanvas(opts, (): NeonNode => App(SAMPLE, appClip, fail)));
+exit(runCanvas(opts, (): NeonNode => App(SAMPLE, "sample.ms", appClip, fail)));

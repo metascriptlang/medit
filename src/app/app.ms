@@ -8,7 +8,9 @@ import { PixelRatio } from "../../../neon/src/api/pixelRatio";
 import { TextSpan } from "../../../neon/src/render/hostTypes";
 import { Void, View, Text, ViewHandle } from "../../../neon/src/components/primitives";
 import { Viewport } from "../view/viewport";
-import { VisualRow, cellIn, holds, offsetIn, rowIndexOf, rowText, rowsOf } from "../view/wrap";
+import { VisualRow, cellIn, holds, offsetIn, rowIndexOf, rowPieces, rowsOf } from "../view/wrap";
+import { Tone } from "../view/tone";
+import { Syntax, covers } from "../syntax/syntax";
 import { Document } from "../model/document";
 import { Editor } from "../model/editor";
 import { Clip, Command, Context, Gesture, commands, drag, insertText, press } from "../model/commands";
@@ -31,6 +33,29 @@ const MULTI_CLICK_MS: number = 400;
 const BLINK_MS: number = 530;
 const MIN_DIGITS: int32 = 3;
 const GUTTER_GAP: int32 = 2;
+const HIGHLIGHT_LIMIT: int32 = 512 * 1024;
+
+function colorOf(tone: Tone): string {
+	switch (tone) {
+		case Tone.Plain: return FOREGROUND;
+		case Tone.Keyword: return "#cba6f7";
+		case Tone.Function: return "#89b4fa";
+		case Tone.Type: return "#f9e2af";
+		case Tone.String: return "#a6e3a1";
+		case Tone.Number: return "#fab387";
+		case Tone.Constant: return "#fab387";
+		case Tone.Comment: return "#7f849c";
+		case Tone.Operator: return "#89dceb";
+		case Tone.Punctuation: return "#9399b2";
+		case Tone.Variable: return FOREGROUND;
+		case Tone.Parameter: return "#eba0ac";
+		case Tone.Property: return "#b4befe";
+		case Tone.Builtin: return "#f38ba8";
+		case Tone.Tag: return "#89b4fa";
+		case Tone.Attribute: return "#f5c2e7";
+	}
+	throw new Error(`colorOf: tone ${tone} has no color`);
+}
 
 export struct Row {
 	spans: TextSpan[];
@@ -55,9 +80,10 @@ function fill<T>(list: List<T>, items: T[]): void {
 	}
 }
 
-export function App(text: string, clip: Clip, fail: (message: string) => void): NeonNode {
+export function App(text: string, path: string, clip: Clip, fail: (message: string) => void): NeonNode {
 	const editor = new Editor(new Document(text));
 	const doc = editor.doc;
+	const syntax = covers(path) && doc.length() <= HIGHLIGHT_LIMIT ? new Syntax() : null;
 	const table = commands();
 	const keymap = defaultKeymap();
 	let area: ViewHandle | null = null;
@@ -127,15 +153,19 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 		const ranges = editor.selections.ranges;
 		const head = ranges[editor.selections.primary].head;
 		const current = doc.lineOf(head);
+		const top = frame.length > 0 ? frame[0].from : 0;
+		const bottom = frame.length > 0 ? frame[frame.length - 1].to : 0;
+		const tones = syntax === null ? [] : (syntax as Syntax).tonesIn(doc, top, bottom);
 		const lines: Row[] = [];
 		for (const r of frame) {
 			const number = r.cell == 0 ? `${r.line + 1}`.padStart(digits, " ") : "".padStart(digits, " ");
-			lines.push({
-				spans: [
-					{ text: number + "".padStart(GUTTER_GAP, " "), style: { color: r.line == current ? GUTTER_CURRENT : GUTTER } },
-					{ text: rowText(doc, r, view.left, view.cols), style: { color: FOREGROUND } },
-				],
-			});
+			const spans: TextSpan[] = [
+				{ text: number + "".padStart(GUTTER_GAP, " "), style: { color: r.line == current ? GUTTER_CURRENT : GUTTER } },
+			];
+			for (const p of rowPieces(doc, r, view.left, view.cols, tones, top)) {
+				spans.push({ text: p.text, style: { color: colorOf(p.tone) } });
+			}
+			lines.push({ spans });
 		}
 		fill(rows, lines);
 		const band = (y: int32, from: int32, to: int32, color: string): Box | null => {
@@ -147,8 +177,6 @@ export function App(text: string, clip: Clip, fail: (message: string) => void): 
 		const lit: Box[] = [];
 		const shaded: Box[] = [];
 		const placed: Box[] = [];
-		const top = frame.length > 0 ? frame[0].from : 0;
-		const bottom = frame.length > 0 ? frame[frame.length - 1].to : 0;
 		for (const s of ranges) {
 			if (s.end() < top || s.start() > bottom + 1) { continue; }
 			for (let i = 0; i < (frame.length as int32); i++) {

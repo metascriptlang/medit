@@ -39,7 +39,7 @@ function main(): int32 {
 	}
 	const contents = text.value;
 	const opts: DesktopOptions = { ...desktopOptions(`medic ${path}`, 960, 640), font: FONT_PATH };
-	return runWindow(opts, (): NeonNode => App(contents, systemClip, fail)) as int32;
+	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, fail)) as int32;
 }
 
 exit(main());
