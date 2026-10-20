@@ -7,7 +7,7 @@ export struct Step {
 	after: Selections;
 }
 
-export function mapThrough(offset: int32, changes: Change[], bias: Bias): int32 {
+export function mapThrough(offset: int32, changes: Span<Change>, bias: Bias): int32 {
 	let at = offset;
 	for (const c of changes) { at = mapOffset(at, c, bias); }
 	return at;
@@ -67,7 +67,7 @@ export class Editor {
 		this.redos = [];
 	}
 
-	change(edits: Edit[]): Change[] {
+	change(edits: Span<Edit>): Change[] {
 		if (this.depth == 0) { throw new Error("Editor.change: an edit needs an open transaction"); }
 		const applied: Change[] = [];
 		let delta = 0;
@@ -88,7 +88,7 @@ export class Editor {
 		return applied;
 	}
 
-	replaceEach(texts: string[]): void {
+	replaceEach(texts: Span<string>): void {
 		if (texts.length != this.selections.ranges.length) {
 			throw new Error(`Editor.replaceEach: ${texts.length} texts for ${this.selections.ranges.length} selections`);
 		}
@@ -131,7 +131,7 @@ export class Editor {
 	}
 }
 
-function editorWith(text: string, cursors: int32[]): Editor {
+function editorWith(text: string, cursors: Span<int32>): Editor {
 	const e = new Editor(new Document(text));
 	const ranges: Sel[] = [];
 	for (const c of cursors) { ranges.push(cursorAt(c)); }
