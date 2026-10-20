@@ -197,11 +197,8 @@ test "the log answers what changed since a version" {
 }
 
 test "the log carries where each change starts and ends, in lines and byte columns" {
-	const d = new Document("ab
-cdé
-f");
-	const _e = d.splice({ from: 4, to: 8, text: "X
-YZ" });
+	const d = new Document("ab\ncdé\nf");
+	const _e = d.splice({ from: 4, to: 8, text: "X\nYZ" });
 	const since = d.changesSince(0);
 	assert since !== null;
 	if (since !== null) {
