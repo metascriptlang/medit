@@ -18,9 +18,9 @@ const appClip: Clip = {
 	read: (done: (text: string) => void): void => { done(held); },
 };
 
-function store(text: string): void {
-	console.log(`medic: the web build has no file to save ${text.byteLength} bytes to`);
+function store(text: string): string | null {
+	return `the web build has no file to save ${text.byteLength} bytes to`;
 }
 
 const opts: CanvasOptions = { ...canvasOptions(960, 640), font: FONT_PATH };
-exit(runCanvas(opts, (): NeonNode => App(SAMPLE, "sample.ms", appClip, store, fail)));
+exit(runCanvas(opts, (): NeonNode => App(SAMPLE, "sample.ms", appClip, store, (dirty: boolean): void => {}, fail)));

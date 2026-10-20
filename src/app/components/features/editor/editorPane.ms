@@ -22,7 +22,8 @@ import { Outcome, defaultKeymap } from "../../../../input/keymap";
 import { Viewport } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax } from "../../../../syntax/syntax";
-import { FONT_SIZE } from "../../../theme";
+import { CARET, FONT_SIZE, MUTED, PANEL } from "../../../theme";
+import { caretPlace, statusLine } from "../../../../view/status";
 import { Box, Overlay } from "../../ui/overlay";
 import { LineRow, Row } from "../../content/lineRow";
 import { Preedit } from "../../content/preedit";
@@ -47,9 +48,11 @@ function fill<T>(list: List<T>, items: T[]): void {
 
 export function EditorPane(props: {
 	editor: Editor;
+	path: string;
 	syntax: Syntax | null;
 	clip: Clip;
-	save: (text: string) => void;
+	save: (text: string) => string | null;
+	dirtied: (dirty: boolean) => void;
 	fail: (message: string) => void;
 }): NeonNode {
 	const { editor, syntax, clip, fail } = props;
@@ -74,6 +77,10 @@ export function EditorPane(props: {
 	const rows: List<Row> = createList<Row>([]);
 	const shades: List<Box> = createList<Box>([]);
 	const carets: List<Box> = createList<Box>([]);
+	const [status, setStatus] = createSignal<Row>({ spans: [] });
+	let titledDirty = false;
+	let saved = false;
+	let refusal: string | null = null;
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
 	const rowsIn = (line: int32): int32 => rowsOf(doc, line, wrapWidth()).length as int32;
@@ -101,6 +108,18 @@ export function EditorPane(props: {
 		return [span(p.open, p.open + 1), span(p.close, p.close + 1)];
 	};
 
+	const report = (): void => {
+		const dirty = editor.isDirty();
+		if (dirty != titledDirty) {
+			titledDirty = dirty;
+			props.dirtied(dirty);
+		}
+		const note = refusal !== null ? ` · ${refusal as string}` : saved && !dirty ? " · saved" : "";
+		const left = ` ${props.path}${dirty ? " ●" : ""}${note}`;
+		const text = statusLine(left, `${caretPlace(doc, editor.selections)} `, columns);
+		setStatus({ spans: [{ text, style: { color: refusal !== null ? CARET : MUTED } }] });
+	};
+
 	const paint = (): void => {
 		fit();
 		frame = framed(doc, view, wrapWidth());
@@ -110,6 +129,7 @@ export function EditorPane(props: {
 		fill(carets, p.carets);
 		if (p.primary !== null) { setCaret(p.primary); }
 		blink.restart();
+		report();
 	};
 
 	const reveal = (): void => {
@@ -143,7 +163,11 @@ export function EditorPane(props: {
 				});
 			},
 		},
-		save: props.save,
+		save: (text: string): string | null => {
+			refusal = props.save(text);
+			saved = refusal === null;
+			return refusal;
+		},
 		findBar: finder.open,
 		findAgain: finder.again,
 	};
@@ -289,5 +313,8 @@ export function EditorPane(props: {
 			</Show>
 		</View>
 		<FindBar finder={finder} moved={reveal} closed={focus} />
+		<View style={{ height: drawn().rowHeight, backgroundColor: PANEL }}>
+			<LineRow row={status()} cellWidth={drawn().cellWidth} rowHeight={drawn().rowHeight} />
+		</View>
 	</View>;
 }

@@ -1,12 +1,14 @@
 import { NeonNode } from "../../../neon/src/render/node";
 import { runWindow, DesktopOptions, desktopOptions } from "../../../neon/src/platform/ion/window";
 import { Clipboard } from "../../../neon/src/api/clipboard";
+import { getWindow, setTitle } from "../../../ion/src/index";
 import { argv, exit } from "std/process";
 import { readFile, rename, writeFile } from "std/fs";
 import { Clip } from "../model/commands";
 import { App } from "./app";
 
 const FONT_PATH = "assets/JetBrainsMonoNL-Regular.ttf";
+const WINDOW_LABEL = "main";
 
 function fail(message: string): void {
 	console.log(`medic: ${message}`);
@@ -26,16 +28,25 @@ const systemClip: Clip = {
 	},
 };
 
-function storeTo(path: string): (text: string) => void {
-	return (text: string): void => {
+function storeTo(path: string): (text: string) => string | null {
+	return (text: string): string | null => {
 		const temp = `${path}.medic-save`;
 		const wrote = writeFile(temp, text);
-		if (!wrote.ok) {
-			console.log(`medic: cannot save ${path}: ${wrote.error.toString()}`);
+		if (!wrote.ok) { return `cannot save: ${wrote.error.toString()}`; }
+		const moved = rename(temp, path);
+		if (!moved.ok) { return `saved to ${temp}, but cannot replace the file: ${moved.error.toString()}`; }
+		return null;
+	};
+}
+
+function titleFor(path: string): (dirty: boolean) => void {
+	return (dirty: boolean): void => {
+		const win = getWindow(WINDOW_LABEL);
+		if (win === null) {
+			console.log(`medic: no window labelled "${WINDOW_LABEL}" to retitle`);
 			return;
 		}
-		const moved = rename(temp, path);
-		if (!moved.ok) { console.log(`medic: saved to ${temp}, but cannot replace ${path}: ${moved.error.toString()}`); }
+		setTitle(win, `${dirty ? "● " : ""}medic ${path}`);
 	};
 }
 
@@ -52,7 +63,7 @@ function main(): int32 {
 	}
 	const contents = text.value;
 	const opts: DesktopOptions = { ...desktopOptions(`medic ${path}`, 960, 640), font: FONT_PATH };
-	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, storeTo(path), fail)) as int32;
+	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, storeTo(path), titleFor(path), fail)) as int32;
 }
 
 exit(main());

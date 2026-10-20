@@ -14,13 +14,22 @@ export function App(
 	text: string,
 	path: string,
 	clip: Clip,
-	store: (text: string) => void,
+	store: (text: string) => string | null,
+	dirtied: (dirty: boolean) => void,
 	fail: (message: string) => void,
 ): NeonNode {
 	const editor = new Editor(new Document(text));
 	editor.lineComment = lineCommentOf(path);
 	const syntax = covers(path) && editor.doc.length() <= HIGHLIGHT_LIMIT ? new Syntax() : null;
 	return <Void style={{ backgroundColor: BACKGROUND, padding: PADDING }}>
-		<EditorPane editor={editor} syntax={syntax} clip={clip} save={store} fail={fail} />
+		<EditorPane
+			editor={editor}
+			path={path}
+			syntax={syntax}
+			clip={clip}
+			save={store}
+			dirtied={dirtied}
+			fail={fail}
+		/>
 	</Void>;
 }
