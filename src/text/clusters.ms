@@ -17,11 +17,16 @@ const WIDE: int32[] = [
 	0x20000, 0x2FFFD, 0x30000, 0x3FFFD,
 ];
 
-function isWide(cp: int32): boolean {
-	if (cp < 0x1100) { return false; }
-	for (let k = 0; k < WIDE.length; k += 2) {
-		if (cp < WIDE[k]) { return false; }
-		if (cp <= WIDE[k + 1]) { return true; }
+// Not full UAX #29: Hangul jamo, Indic conjuncts and regional-indicator flags split; widen this when one of them is typed.
+const EXTEND: int32[] = [
+	0x0300, 0x036F, 0x1AB0, 0x1AFF, 0x1DC0, 0x1DFF, 0x20D0, 0x20FF, 0xFE00, 0xFE0F, 0xFE20, 0xFE2F,
+	0x1F3FB, 0x1F3FF, 0xE0020, 0xE007F,
+];
+
+function inRanges(ranges: Readonly<Span<int32>>, cp: int32): boolean {
+	for (let k = 0; k < ranges.length; k += 2) {
+		if (cp < ranges[k]) { return false; }
+		if (cp <= ranges[k + 1]) { return true; }
 	}
 	return false;
 }
@@ -43,18 +48,6 @@ function codePointIn(b: Readonly<Span<uint8>>, at: int32): int32 {
 	return cp;
 }
 
-// Not full UAX #29: Hangul jamo, Indic conjuncts and regional-indicator flags split; widen this when one of them is typed.
-function continuesCluster(cp: int32): boolean {
-	return (cp >= 0x0300 && cp <= 0x036F) ||
-		(cp >= 0x1AB0 && cp <= 0x1AFF) ||
-		(cp >= 0x1DC0 && cp <= 0x1DFF) ||
-		(cp >= 0x20D0 && cp <= 0x20FF) ||
-		(cp >= 0xFE00 && cp <= 0xFE0F) ||
-		(cp >= 0xFE20 && cp <= 0xFE2F) ||
-		(cp >= 0x1F3FB && cp <= 0x1F3FF) ||
-		(cp >= 0xE0020 && cp <= 0xE007F);
-}
-
 export function nextClusterIn(b: Readonly<Span<uint8>>, from: int32): int32 {
 	const total = b.length as int32;
 	if (from >= total) { return total; }
@@ -64,7 +57,7 @@ export function nextClusterIn(b: Readonly<Span<uint8>>, from: int32): int32 {
 		if (cp == ZWJ) {
 			at += stepIn(b, at);
 			if (at < total) { at += stepIn(b, at); }
-		} else if (continuesCluster(cp)) {
+		} else if (inRanges(EXTEND, cp)) {
 			at += stepIn(b, at);
 		} else {
 			break;
@@ -76,7 +69,7 @@ export function nextClusterIn(b: Readonly<Span<uint8>>, from: int32): int32 {
 function startsClusterIn(b: Readonly<Span<uint8>>, at: int32): boolean {
 	if (isTrail(b[at] as int32)) { return false; }
 	const cp = codePointIn(b, at);
-	if (cp == ZWJ || continuesCluster(cp)) { return false; }
+	if (cp == ZWJ || inRanges(EXTEND, cp)) { return false; }
 	if (at == 0) { return true; }
 	let prev = at - 1;
 	while (prev > 0 && isTrail(b[prev] as int32)) { prev -= 1; }
@@ -100,7 +93,7 @@ export function clusterCellsIn(b: Readonly<Span<uint8>>, at: int32, cell: int32)
 	const lead = b[at] as int32;
 	if (lead == TAB) { return TAB_SIZE - cell % TAB_SIZE; }
 	if (lead < 0x80) { return 1; }
-	return isWide(codePointIn(b, at)) ? 2 : 1;
+	return inRanges(WIDE, codePointIn(b, at)) ? 2 : 1;
 }
 
 export function cellsIn(b: Readonly<Span<uint8>>, from: int32, to: int32, cell: int32): int32 {
@@ -149,4 +142,23 @@ test "cells count a wide cluster two and a tab to the next stop" {
 	assert offsetAtCellIn(b, 0, 10, 0, 2) == 1;
 	assert offsetAtCellIn(b, 0, 10, 0, 6) == 7;
 	assert offsetAtCellIn(b, 0, 10, 0, 99) == 10;
+}
+
+test "a range table holds the first and the last code point of each range" {
+	const ranges = [10, 20, 30, 30];
+	assert !inRanges(ranges, 9);
+	assert inRanges(ranges, 10);
+	assert inRanges(ranges, 20);
+	assert !inRanges(ranges, 21);
+	assert inRanges(ranges, 30);
+	assert !inRanges(ranges, 31);
+}
+
+test "a variation selector and a tag stay in the cluster before them" {
+	const b = "\u2764\uFE0Fx\u{1F3F4}\u{E0067}\u{E007F}y".asBytes();
+	assert nextClusterIn(b, 0) == 6;
+	assert nextClusterIn(b, 6) == 7;
+	assert nextClusterIn(b, 7) == 19;
+	assert prevClusterIn(b, 19) == 7;
+	assert prevClusterIn(b, 6) == 0;
 }
