@@ -58,10 +58,8 @@ export class Editor {
 		const last = this.undos.length - 1;
 		if (this.group != "" && this.group == this.lastGroup && last >= 0 &&
 			this.undos[last].after.sameSelections(this.pendingBefore)) {
-			const top = this.undos[last];
-			const edits = top.edits.slice(0, top.edits.length);
-			for (const e of this.pending) { edits.push(e); }
-			this.undos[last] = { edits, before: top.before, after: this.selections };
+			for (const e of this.pending) { this.undos[last].edits.push(e); }
+			this.undos[last].after = this.selections;
 		} else {
 			this.undos.push({ edits: this.pending, before: this.pendingBefore, after: this.selections });
 		}
