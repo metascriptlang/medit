@@ -59,9 +59,9 @@ export function rowsOf(doc: Document, line: int32, width: int32): VisualRow[] {
 	return rows;
 }
 
-export function rowIndexOf(rows: VisualRow[], offset: int32): int32 {
+export function rowIndexOf(rows: Readonly<Span<VisualRow>>, offset: int32): int32 {
 	for (let k = 0; k < rows.length; k++) {
-		if (rows[k].last || offset < rows[k].to) { return k as int32; }
+		if (rows[k].last || offset < rows[k].to) { return k; }
 	}
 	return (rows.length as int32) - 1;
 }
@@ -83,7 +83,14 @@ function pushSpaces(out: uint8[], count: int32): void {
 	for (let k = 0; k < count; k++) { out.push(SPACE as uint8); }
 }
 
-export function rowPieces(doc: Document, r: VisualRow, left: int32, cols: int32, tones: Tone[], base: int32): Piece[] {
+export function rowPieces(
+	doc: Document,
+	r: VisualRow,
+	left: int32,
+	cols: int32,
+	tones: Readonly<Span<Tone>>,
+	base: int32,
+): Piece[] {
 	const pieces: Piece[] = [];
 	let out: uint8[] = [];
 	let tone = Tone.Plain;
@@ -130,7 +137,7 @@ export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): 
 	return parts.join("");
 }
 
-function texts(doc: Document, rows: VisualRow[]): string {
+function texts(doc: Document, rows: Readonly<Span<VisualRow>>): string {
 	const parts: string[] = [];
 	for (const r of rows) { parts.push(doc.slice(r.from, r.to)); }
 	return parts.join("|");
