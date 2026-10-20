@@ -196,7 +196,7 @@ export function insertText(e: Editor, text: string): void {
 	e.end();
 }
 
-function newline(e: Editor): void {
+function newline(e: Editor, cx: Context): void {
 	const texts: string[] = [];
 	for (const s of e.selections.ranges) {
 		const line = e.doc.lineOf(s.start());
@@ -215,7 +215,7 @@ function indent(e: Editor): void {
 	rewriteLines(e, edits);
 }
 
-function outdent(e: Editor): void {
+function outdent(e: Editor, cx: Context): void {
 	const edits: Edit[] = [];
 	for (const l of touchedLines(e)) {
 		const from = e.doc.lineStart(l);
@@ -230,7 +230,7 @@ function outdent(e: Editor): void {
 	rewriteLines(e, edits);
 }
 
-function tab(e: Editor): void {
+function tab(e: Editor, cx: Context): void {
 	for (const s of e.selections.ranges) {
 		if (e.doc.lineOf(s.start()) != e.doc.lineOf(s.end())) {
 			indent(e);
@@ -290,7 +290,7 @@ function addCursor(e: Editor, rows: int32): void {
 	addPrimary(e, { anchor: head, head, goal });
 }
 
-function selectNextOccurrence(e: Editor): void {
+function selectNextOccurrence(e: Editor, cx: Context): void {
 	const ranges = e.selections.ranges;
 	const primary = ranges[e.selections.primary];
 	if (primary.isEmpty()) {
@@ -304,7 +304,7 @@ function selectNextOccurrence(e: Editor): void {
 	addPrimary(e, span(at, at + needle.byteLength));
 }
 
-function selectLine(e: Editor): void {
+function selectLine(e: Editor, cx: Context): void {
 	reselect(e, (s: Sel): Sel => {
 		const [first, last] = linesOf(e.doc, s);
 		return span(e.doc.lineStart(first), afterLine(e.doc, last));
@@ -332,22 +332,22 @@ export function commands(): Map<string, Command> {
 	table.set("selectAll", (e: Editor, cx: Context): void => {
 		e.select({ ranges: [span(0, e.doc.length())], primary: 0 });
 	});
-	table.set("selectLine", (e: Editor, cx: Context): void => { selectLine(e); });
-	table.set("selectNextOccurrence", (e: Editor, cx: Context): void => { selectNextOccurrence(e); });
+	table.set("selectLine", selectLine);
+	table.set("selectNextOccurrence", selectNextOccurrence);
 	table.set("addCursorAbove", (e: Editor, cx: Context): void => { addCursor(e, -1); });
 	table.set("addCursorBelow", (e: Editor, cx: Context): void => { addCursor(e, 1); });
 	table.set("collapse", (e: Editor, cx: Context): void => {
 		e.select(single(e.selections.ranges[e.selections.primary].head));
 	});
-	table.set("newline", (e: Editor, cx: Context): void => { newline(e); });
-	table.set("tab", (e: Editor, cx: Context): void => { tab(e); });
-	table.set("outdent", (e: Editor, cx: Context): void => { outdent(e); });
+	table.set("newline", newline);
+	table.set("tab", tab);
+	table.set("outdent", outdent);
 	table.set("backspace", deleteToward("delete", prevCluster));
 	table.set("delete", deleteToward("delete", nextCluster));
 	table.set("deleteWordLeft", deleteToward("", wordLeft));
 	table.set("deleteWordRight", deleteToward("", wordRight));
-	table.set("undo", (e: Editor, cx: Context): void => { const _u = e.undo(); });
-	table.set("redo", (e: Editor, cx: Context): void => { const _r = e.redo(); });
+	table.set("undo", (e: Editor, cx: Context): void => { e.undo(); });
+	table.set("redo", (e: Editor, cx: Context): void => { e.redo(); });
 	table.set("copy", copy);
 	table.set("cut", cut);
 	table.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
