@@ -19,8 +19,8 @@ const WIDE: int32[] = [
 
 // Not full UAX #29: Hangul jamo, Indic conjuncts and regional-indicator flags split; widen this when one of them is typed.
 const EXTEND: int32[] = [
-	0x0300, 0x036F, 0x1AB0, 0x1AFF, 0x1DC0, 0x1DFF, 0x20D0, 0x20FF, 0xFE00, 0xFE0F, 0xFE20, 0xFE2F,
-	0x1F3FB, 0x1F3FF, 0xE0020, 0xE007F,
+	0x0300, 0x036F, 0x1AB0, 0x1AFF, 0x1DC0, 0x1DFF, ZWJ, ZWJ, 0x20D0, 0x20FF, 0xFE00, 0xFE0F,
+	0xFE20, 0xFE2F, 0x1F3FB, 0x1F3FF, 0xE0020, 0xE007F,
 ];
 
 function inRanges(ranges: Readonly<Span<int32>>, codePoint: int32): boolean {
@@ -56,22 +56,15 @@ export function nextClusterIn(bytes: Readonly<Span<uint8>>, from: int32): int32 
 	let at = from + stepIn(bytes, from);
 	while (at < total) {
 		const codePoint = codePointIn(bytes, at);
-		if (codePoint == ZWJ) {
-			at += stepIn(bytes, at);
-			if (at < total) { at += stepIn(bytes, at); }
-		} else if (inRanges(EXTEND, codePoint)) {
-			at += stepIn(bytes, at);
-		} else {
-			break;
-		}
+		if (!inRanges(EXTEND, codePoint)) { break; }
+		at += stepIn(bytes, at);
+		if (codePoint == ZWJ && at < total) { at += stepIn(bytes, at); }
 	}
 	return at;
 }
 
 function startsClusterIn(bytes: Readonly<Span<uint8>>, at: int32): boolean {
-	if (isTrail(bytes[at] as int32)) { return false; }
-	const codePoint = codePointIn(bytes, at);
-	if (codePoint == ZWJ || inRanges(EXTEND, codePoint)) { return false; }
+	if (isTrail(bytes[at] as int32) || inRanges(EXTEND, codePointIn(bytes, at))) { return false; }
 	if (at == 0) { return true; }
 	let prev = at - 1;
 	while (prev > 0 && isTrail(bytes[prev] as int32)) { prev -= 1; }
