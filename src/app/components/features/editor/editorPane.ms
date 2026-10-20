@@ -6,6 +6,7 @@ import { ForList, Show } from "../../../../../../neon/src/macros/ui/flow";
 import { PixelRatio } from "../../../../../../neon/src/api/pixelRatio";
 import { View, ViewHandle } from "../../../../../../neon/src/components/primitives";
 import { Editor } from "../../../../model/editor";
+import { primaryRange } from "../../../../model/selection";
 import {
 	Clip,
 	Context,
@@ -93,7 +94,7 @@ export function EditorPane(props: {
 
 	const reveal = (): void => {
 		fit();
-		const head = editor.selections.ranges[editor.selections.primary].head;
+		const head = editor.selections.primaryRange().head;
 		const line = doc.lineOf(head);
 		const lineRows = rowsOf(doc, line, wrapWidth());
 		const k = rowIndexOf(lineRows, head);

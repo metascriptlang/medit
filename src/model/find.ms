@@ -1,6 +1,6 @@
 import { Bias, Document, Edit } from "./document";
 import { Editor, mapThrough } from "./editor";
-import { Sel, end, single, span, start } from "./selection";
+import { end, primaryRange, single, span, start } from "./selection";
 
 const WINDOW: int32 = 64 * 1024;
 
@@ -82,8 +82,6 @@ export function allMatches(this doc: Document, needle: string): int32[] {
 	return hits;
 }
 
-function primarySel(this e: Editor): Sel { return e.selections.ranges[e.selections.primary]; }
-
 function selectAt(this e: Editor, needle: string, at: int32): boolean {
 	if (at < 0) { return false; }
 	e.select({ ranges: [span(at, at + needle.byteLength)], primary: 0 });
@@ -91,17 +89,17 @@ function selectAt(this e: Editor, needle: string, at: int32): boolean {
 }
 
 export function selectMatch(this e: Editor, needle: string, backwards: boolean): boolean {
-	const s = e.primarySel();
+	const s = e.selections.primaryRange();
 	const at = backwards ? e.doc.prevMatch(needle, s.start()) : e.doc.nextMatch(needle, s.end());
 	return e.selectAt(needle, at);
 }
 
 export function selectFirstMatch(this e: Editor, needle: string): boolean {
-	return e.selectAt(needle, e.doc.nextMatch(needle, e.primarySel().start()));
+	return e.selectAt(needle, e.doc.nextMatch(needle, e.selections.primaryRange().start()));
 }
 
 export function replaceMatch(this e: Editor, needle: string, replacement: string): boolean {
-	const s = e.primarySel();
+	const s = e.selections.primaryRange();
 	if (e.selections.ranges.length == 1 && e.doc.slice(s.start(), s.end()) == needle) {
 		e.replaceSelections(replacement);
 	}
@@ -117,7 +115,7 @@ export function replaceAll(this e: Editor, needle: string, replacement: string):
 	}
 	e.begin();
 	const applied = e.change(edits);
-	e.select(single(mapThrough(e.primarySel().head, applied, Bias.Right)));
+	e.select(single(mapThrough(e.selections.primaryRange().head, applied, Bias.Right)));
 	e.end();
 	return hits.length as int32;
 }

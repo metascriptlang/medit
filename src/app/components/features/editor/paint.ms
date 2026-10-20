@@ -1,6 +1,6 @@
 import { TextSpan } from "../../../../../../neon/src/render/hostTypes";
 import { Document } from "../../../../model/document";
-import { Selections, end, isEmpty, start } from "../../../../model/selection";
+import { Selections, end, isEmpty, primaryRange, start } from "../../../../model/selection";
 import { cellsBetween } from "../../../../model/motion";
 import { Viewport } from "../../../../view/viewport";
 import { VisualRow, cellIn, holds, rowPieces, rowsOf } from "../../../../view/wrap";
@@ -61,7 +61,7 @@ export function painted(
 	const gutter = gutterWidth(doc.lineCount());
 	const textX = gutter * cellWidth;
 	const digits = gutter - GUTTER_GAP;
-	const head = selections.ranges[selections.primary].head;
+	const head = selections.primaryRange().head;
 	const current = doc.lineOf(head);
 	const top = frame.length > 0 ? frame[0].from : 0;
 	const bottom = frame.length > 0 ? frame[frame.length - 1].to : 0;

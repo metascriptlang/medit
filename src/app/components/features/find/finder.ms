@@ -2,7 +2,7 @@ import { Accessor, createSignal } from "../../../../../../neon/src/core/signal";
 import { TextInputHandle } from "../../../../../../neon/src/components/primitives";
 import { Editor } from "../../../../model/editor";
 import { replaceAll, replaceMatch, selectFirstMatch, selectMatch } from "../../../../model/find";
-import { end, isEmpty, start } from "../../../../model/selection";
+import { end, isEmpty, primaryRange, start } from "../../../../model/selection";
 
 export interface Finder {
 	shown: Accessor<boolean>;
@@ -30,7 +30,7 @@ export function createFinder(editor: Editor): Finder {
 	let input: TextInputHandle | null = null;
 	const found = (hit: boolean): void => { setNote(hit ? "" : "no match"); };
 	const open = (replace: boolean): void => {
-		const s = editor.selections.ranges[editor.selections.primary];
+		const s = editor.selections.primaryRange();
 		if (!s.isEmpty() && doc.lineOf(s.start()) == doc.lineOf(s.end())) {
 			setQuery(doc.slice(s.start(), s.end()));
 		}

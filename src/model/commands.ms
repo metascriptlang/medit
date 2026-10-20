@@ -11,7 +11,7 @@ import {
 	wordLeft,
 	wordRight,
 } from "./motion";
-import { Sel, cursorAt, single, span } from "./selection";
+import { Sel, cursorAt, primaryRange, single, span } from "./selection";
 import { nextMatch } from "./find";
 import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
@@ -289,7 +289,7 @@ function addCursor(e: Editor, rows: int32): void {
 
 function selectNextOccurrence(e: Editor, cx: Context): void {
 	const ranges = e.selections.ranges;
-	const primary = ranges[e.selections.primary];
+	const primary = e.selections.primaryRange();
 	if (primary.isEmpty()) {
 		const word = wordSpan(e.doc, primary.head);
 		if (!word.isEmpty()) { replacePrimary(e, word); }
@@ -334,7 +334,7 @@ export function commands(): Map<string, Command> {
 	table.set("addCursorAbove", (e: Editor, cx: Context): void => { addCursor(e, -1); });
 	table.set("addCursorBelow", (e: Editor, cx: Context): void => { addCursor(e, 1); });
 	table.set("collapse", (e: Editor, cx: Context): void => {
-		e.select(single(e.selections.ranges[e.selections.primary].head));
+		e.select(single(e.selections.primaryRange().head));
 	});
 	table.set("newline", newline);
 	table.set("tab", tab);
@@ -379,7 +379,7 @@ export function press(
 	extend: boolean,
 	add: boolean,
 ): Gesture {
-	const anchor = e.selections.ranges[e.selections.primary].anchor;
+	const anchor = e.selections.primaryRange().anchor;
 	if (extend) {
 		replacePrimary(e, span(anchor, offset));
 		return { origin: cursorAt(anchor), clicks: 1 };

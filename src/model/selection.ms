@@ -25,6 +25,8 @@ export function single(offset: int32): Selections {
 	return { ranges: [cursorAt(offset)], primary: 0 };
 }
 
+export function primaryRange(this s: Selections): Sel { return s.ranges[s.primary]; }
+
 export function sameSelections(this a: Selections, b: Selections): boolean {
 	if (a.ranges.length != b.ranges.length) { return false; }
 	for (let i = 0; i < a.ranges.length; i++) {
