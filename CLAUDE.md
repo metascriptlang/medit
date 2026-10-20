@@ -22,6 +22,9 @@ A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
   a frame of 40 wrapped lines took 3.6 ms through the rope's `byteAt` against 0.2 ms over line bytes
   (100 MB, release, 2026-10-20). Columns, wrap, drawing and clicks share that one width function.
 - A per-frame cost is bounded by the viewport, never by the document size.
+- The document holds LF only: `splice` turns inserted CRLF into LF, and `fileText` gives a file
+  back CRLF when its first line break was CRLF. A lone CR stays and draws as ␍. A desktop save
+  writes `<path>.medic-save` and renames it over the file, so a failed write leaves the file whole.
 - `src/syntax` compiles vendored C: the tree-sitter runtime and recompiler's MetaScript grammar,
   versions in `vendor/SOURCES`.
   `sh scripts/vendorSyntax.sh` re-vendors both and regenerates `src/syntax/highlights.ms`. The C
@@ -42,8 +45,11 @@ Run from the repository root: fonts are loaded by relative path.
 - Desktop (Ion window, Windows): `msc build src/app/medic.ms --output=out/medic.exe`, then
   `out/medic.exe <file>`. Add `--release` to open large files: building the document of a 100 MB
   file took 0.25 s in release against 2.6 s in debug (2026-10-20).
-- Open cost: `msc run --release scripts/openBench.ms -- <megabytes>` times the document build, one
-  frame's line reads and one keystroke on generated text.
+- Open cost: `msc run --release scripts/openBench.ms -- <megabytes>` times the document build, a
+  scroll frame, a keystroke, a find over the whole file and a save's file text on generated text,
+  and exits 1 when one of the first three passes its `*_BUDGET_*` constant. At 100 MB on
+  2026-10-20: document 281 ms, scroll frame 110 us, keystroke 10 us, find of 1.28 M matches 165 ms,
+  file text 490 ms.
 - Highlight cost: `msc run --release scripts/syntaxBench.ms -- <file>` times the first parse, a
   keystroke's reparse at three places and the tones of 40 lines.
 - Web (`runCanvas`, `--os=emcc`): `sh scripts/buildWeb.sh [gl] [wgpu]` writes `out/web/`; serve
@@ -53,6 +59,6 @@ Run from the repository root: fonts are loaded by relative path.
 
 ## Gate
 
-`sh scripts/gate.sh`: `msc test` on every file under `src/` that holds tests, then both builds
-above; a land runs it with `wt.sh land --gate 'sh scripts/gate.sh'`. WebGPU has no
+`sh scripts/gate.sh`: `msc test` on every file under `src/` that holds tests, the open bench at
+100 MB, then both builds above; a land runs it with `wt.sh land --gate 'sh scripts/gate.sh'`. WebGPU has no
 adapter in headless Chrome on this machine, so it builds but renders only in a headed browser.
