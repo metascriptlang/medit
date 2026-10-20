@@ -31,19 +31,10 @@ export struct LoggedChange {
 	newEnd: Point;
 }
 
-export function pointAfter(start: Point, text: string): Point {
-	let newline = text.byteIndexOf("
-");
-	if (newline < 0) { return { line: start.line, column: start.column + text.byteLength }; }
-	let line = start.line;
-	let last = newline;
-	while (newline >= 0) {
-		line += 1;
-		last = newline;
-		newline = text.byteIndexOf("
-", newline + 1);
-	}
-	return { line, column: text.byteLength - last - 1 };
+export function pointAfter(this start: Point, text: string): Point {
+	const last = text.byteLastIndexOf("\n");
+	if (last < 0) { return { line: start.line, column: start.column + text.byteLength }; }
+	return { line: start.line + text.count("\n"), column: text.byteLength - last - 1 };
 }
 
 export enum Bias {
@@ -116,7 +107,12 @@ export class Document {
 		};
 		this.current += 1;
 		if ((this.log.length as int32) == LOG_SIZE) { this.log.shift(); }
-		this.log.push({ change, start, oldEnd: pointAfter(start, removed), newEnd: pointAfter(start, text) });
+		this.log.push({
+			change,
+			start,
+			oldEnd: start.pointAfter(removed),
+			newEnd: start.pointAfter(text),
+		});
 		for (let i = 0; i < this.anchors.length; i++) {
 			const slot = this.anchors[i];
 			if (slot.live) { this.anchors[i] = { ...slot, offset: mapOffset(slot.offset, change, slot.bias) }; }
@@ -216,6 +212,16 @@ YZ" });
 		assert c.oldEnd.line == 2 && c.oldEnd.column == 0;
 		assert c.newEnd.line == 2 && c.newEnd.column == 2;
 	}
+}
+
+test "a point advances over text by lines and byte columns" {
+	const start: Point = { line: 3, column: 2 };
+	const sameLine = start.pointAfter("é");
+	assert sameLine.line == 3 && sameLine.column == 4;
+	const twoBelow = start.pointAfter("a\n\nbc");
+	assert twoBelow.line == 5 && twoBelow.column == 2;
+	const lineStart = start.pointAfter("x\n");
+	assert lineStart.line == 4 && lineStart.column == 0;
 }
 
 test "a version older than the log asks for a full resync" {
