@@ -99,7 +99,7 @@ export function defaultKeymap(): Keymap {
 		["ctrl+Backspace", "deleteWordLeft"], ["ctrl+Delete", "deleteWordRight"],
 		["ctrl+z", "undo"], ["ctrl+y", "redo"], ["ctrl+shift+z", "redo"],
 		["ctrl+c", "copy"], ["ctrl+x", "cut"], ["ctrl+v", "paste"], ["ctrl+s", "save"],
-		["ctrl+f", "find"], ["ctrl+h", "replace"], ["F3", "findNext"], ["shift+F3", "findPrev"],
+		["ctrl+f", "find"], ["ctrl+g", "goToLine"], ["ctrl+h", "replace"], ["F3", "findNext"], ["shift+F3", "findPrev"],
 		["ctrl+Insert", "copy"], ["shift+Delete", "cut"], ["shift+Insert", "paste"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }

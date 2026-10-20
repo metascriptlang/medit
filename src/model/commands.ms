@@ -31,6 +31,7 @@ export interface Context {
 	clip: Clip;
 	save: (text: string) => string | null;
 	findBar: (replace: boolean) => void;
+	goToLine: () => void;
 	findAgain: (backwards: boolean) => void;
 }
 
@@ -635,6 +636,7 @@ export function commands(): Map<string, Command> {
 		if (cx.save(e.doc.fileText()) === null) { e.markSaved(); }
 	});
 	table.set("find", (e: Editor, cx: Context): void => { cx.findBar(false); });
+	table.set("goToLine", (e: Editor, cx: Context): void => { cx.goToLine(); });
 	table.set("replace", (e: Editor, cx: Context): void => { cx.findBar(true); });
 	table.set("findNext", (e: Editor, cx: Context): void => { cx.findAgain(false); });
 	table.set("findPrev", (e: Editor, cx: Context): void => { cx.findAgain(true); });
@@ -715,6 +717,7 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 			return refusal;
 		},
 		findBar: (replace: boolean): void => {},
+		goToLine: (): void => {},
 		findAgain: (backwards: boolean): void => {},
 	};
 	return (e: Editor, name: string): void => {
