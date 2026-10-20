@@ -65,17 +65,15 @@ function leafFrom(bytes: Readonly<Span<uint8>>, from: int32, to: int32, crlf: bo
 	return leaf(out.asString(), breaks);
 }
 
-function pushLeaves(text: string, crlf: boolean, out: Node[]): void {
+function leavesOf(text: string, crlf: boolean): Node[] {
 	const total = text.byteLength;
-	if (total == 0) { return; }
-	if (total <= LEAF_MAX && !crlf) {
-		out.push(leafOf(text));
-		return;
-	}
+	if (total == 0) { return []; }
+	if (total <= LEAF_MAX && !crlf) { return [leafOf(text)]; }
 	const bytes = text.asBytes();
 	const count = (total + LEAF_MAX - SPLIT_SLACK - 1) / (LEAF_MAX - SPLIT_SLACK);
 	const base = total / count;
 	const extra = total % count;
+	const out: Node[] = [];
 	let target = 0;
 	let at = 0;
 	for (let k = 1; k <= count; k++) {
@@ -87,6 +85,7 @@ function pushLeaves(text: string, crlf: boolean, out: Node[]): void {
 		out.push(leafFrom(bytes, at, end, crlf));
 		at = end;
 	}
+	return out;
 }
 
 function grouped(nodes: Node[]): Node[] {
@@ -108,37 +107,31 @@ function underfull(n: Node): boolean {
 
 function merged(a: Node, b: Node): Node[] {
 	if (a.height > 0) { return grouped(rebalanced(a.children.concat(b.children))); }
-	const out: Node[] = [];
-	pushLeaves(a.text + b.text, false, out);
-	return out;
+	return leavesOf(a.text + b.text, false);
 }
 
-function rebalanced(nodes: Node[]): Node[] {
+function rebalanced(nodes: Span<Node>): Node[] {
 	const out: Node[] = [];
 	for (let k = 0; k < nodes.length; k++) {
-		const n = nodes[k];
+		const node = nodes[k];
 		const last = out.length - 1;
-		if (last >= 0 && (underfull(n) || underfull(out[last]))) {
-			const prev = out.pop() as Node;
-			const both = merged(prev, n);
-			for (let m = 0; m < both.length; m++) { out.push(both[m]); }
+		if (last >= 0 && (underfull(node) || underfull(out[last]))) {
+			pushAll(out, merged(out.pop(), node));
 		} else {
-			out.push(n);
+			out.push(node);
 		}
 	}
 	return out;
 }
 
-function pushAll(out: Node[], nodes: Node[]): void {
+function pushAll(out: Node[], nodes: Span<Node>): void {
 	for (let k = 0; k < nodes.length; k++) { out.push(nodes[k]); }
 }
 
 function replaced(node: Node, from: int32, to: int32, text: string): Node[] {
 	if (node.height == 0) {
 		const body = node.text;
-		const out: Node[] = [];
-		pushLeaves(body.byteSlice(0, from) + text + body.byteSlice(to, node.bytes), false, out);
-		return out;
+		return leavesOf(body.byteSlice(0, from) + text + body.byteSlice(to, node.bytes), false);
 	}
 	const kids = node.children;
 	const sizes = node.sizes;
@@ -161,7 +154,7 @@ function replaced(node: Node, from: int32, to: int32, text: string): Node[] {
 		pushAll(out, replaced(kids[i], from - start, sizes[i], text));
 		pushAll(out, replaced(kids[j], 0, to - startJ, ""));
 	}
-	for (let k = j + 1; k < kids.length; k++) { out.push(kids[k]); }
+	pushAll(out, kids[j + 1..kids.length]);
 	return grouped(rebalanced(out));
 }
 
@@ -194,9 +187,7 @@ export class Rope {
 	private root: Node;
 
 	constructor(text: string) {
-		const leaves: Node[] = [];
-		pushLeaves(text, true, leaves);
-		this.root = rootOf(leaves);
+		this.root = rootOf(leavesOf(text, true));
 	}
 
 	length(): int32 { return this.root.bytes; }
@@ -413,9 +404,7 @@ test "building turns CRLF into LF, across leaf boundaries too" {
 test "random edits agree with a plain string and keep the tree balanced" {
 	let seed: uint32 = 2026;
 	let model = sampleText(3, 40 * LEAF_MAX);
-	const leaves: Node[] = [];
-	pushLeaves(model, false, leaves);
-	let root = rootOf(leaves);
+	let root = rootOf(leavesOf(model, false));
 	for (let step = 0; step < 400; step++) {
 		seed = nextSeed(seed);
 		const total = model.byteLength as uint32;
@@ -458,9 +447,7 @@ test "rope queries agree with a plain string after edits" {
 
 test "a kept root still reads the text from before an edit" {
 	const text = sampleText(9, 50000);
-	const leaves: Node[] = [];
-	pushLeaves(text, false, leaves);
-	const before = rootOf(leaves);
+	const before = rootOf(leavesOf(text, false));
 	const after = rootOf(replaced(before, 100, 40000, "x"));
 	assert textOf(before) == text;
 	assert after.bytes == text.byteLength - 39900 + 1;
