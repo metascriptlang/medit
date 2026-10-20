@@ -3,6 +3,13 @@
 A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
 `~/metascript/docs/CODE-STYLE.md`.
 
+The repository is public (`github.com/metascriptlang/medit`). Tracked text, commit messages
+included, names no editor or project medic took a design from, because a reader of a public
+repository takes a named source as copied code: describe the behaviour itself, and keep design
+sources and their `file:line` anchors in the arc card under `~/metascript/.wt/`. Vendored
+dependencies with their licences and medic's own stack (Neon, Void, Ion, recompiler) are named as
+usual.
+
 ## Layers
 
 - `src/text`, `src/model`, `src/input`, `src/view` are headless: they import nothing
