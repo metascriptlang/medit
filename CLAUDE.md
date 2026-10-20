@@ -22,6 +22,18 @@ A code editor on Neon + Void. Workspace rules: `~/metascript/CLAUDE.md`; style:
   a frame of 40 wrapped lines took 3.6 ms through the rope's `byteAt` against 0.2 ms over line bytes
   (100 MB, release, 2026-10-20). Columns, wrap, drawing and clicks share that one width function.
 - A per-frame cost is bounded by the viewport, never by the document size.
+- `src/syntax` compiles vendored C: the tree-sitter runtime and recompiler's MetaScript grammar,
+  versions in `vendor/SOURCES`.
+  `sh scripts/vendorSyntax.sh` re-vendors both and regenerates `src/syntax/highlights.ms`. The C
+  runtime does not evaluate query predicates, so `Syntax` evaluates `#any-of?`, `#lua-match?` and
+  `#eq?` itself and refuses any other by name.
+- Highlighting stops above `HIGHLIGHT_LIMIT` (`src/app/app.ms`) because parsing runs on the UI
+  thread. `syntaxBench`, release, 2026-10-20: a first parse runs at about 10 MB/s; one keystroke's
+  reparse took 15 ms at 454 KB of recompiler source and 43-54 ms at 0.9 MB, against 7 ms at 2 MB of
+  generated code that parses without errors. The grammar leaves error nodes in recompiler source
+  (`~/metascript/.inbox/compiler/2026-10-20-tree-sitter-grammar-behind-the-language.md`), and those
+  make the reparse slow; once it parses them, the limit can rise to about 2 MB. Larger files need
+  parsing off the UI thread.
 
 ## Build and run
 
@@ -32,6 +44,8 @@ Run from the repository root: fonts are loaded by relative path.
   file took 0.25 s in release against 2.6 s in debug (2026-10-20).
 - Open cost: `msc run --release scripts/openBench.ms -- <megabytes>` times the document build, one
   frame's line reads and one keystroke on generated text.
+- Highlight cost: `msc run --release scripts/syntaxBench.ms -- <file>` times the first parse, a
+  keystroke's reparse at three places and the tones of 40 lines.
 - Web (`runCanvas`, `--os=emcc`): `sh scripts/buildWeb.sh [gl] [wgpu]` writes `out/web/`; serve
   that directory and open `index.html` (`?gl` / `?wgpu` force a backend).
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
