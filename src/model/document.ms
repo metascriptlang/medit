@@ -1,11 +1,10 @@
 import { Rope } from "../text/rope";
 
 export const LOG_SIZE: int32 = 256;
-const RETURN: int32 = 13;
 
-function breaksWithCrlf(text: string): boolean {
+function breaksWithCrlf(this text: string): boolean {
 	const at = text.byteIndexOf("\n");
-	return at > 0 && text.byteAt(at - 1) == RETURN;
+	return at > 0 && text.byteAt(at - 1) == "\r".code;
 }
 
 export struct Edit {
@@ -81,7 +80,7 @@ export class Document {
 
 	constructor(text: string) {
 		this.rope = new Rope(text);
-		this.crlf = breaksWithCrlf(text);
+		this.crlf = text.breaksWithCrlf();
 		this.current = 0;
 		this.log = [];
 		this.anchors = [];
