@@ -1,3 +1,5 @@
+import { isTrail } from "./clusters";
+
 export const LEAF_MAX: int32 = 2048;
 const LEAF_MIN: int32 = LEAF_MAX / 2;
 const SPLIT_SLACK: int32 = 4;
@@ -50,10 +52,6 @@ function branchOf(children: Node[]): Node {
 	return { text: "", children, sizes, lines, bytes, breaks, height: children[0].height + 1 };
 }
 
-function isContinuation(text: string, at: int32): boolean {
-	return (text.byteAt(at) & 0xC0) == 0x80;
-}
-
 function leafFrom(bytes: Readonly<Span<uint8>>, from: int32, to: int32, crlf: boolean): Node {
 	const out: uint8[] = [];
 	let breaks = 0;
@@ -79,7 +77,7 @@ function leavesOf(text: string, crlf: boolean): Node[] {
 	for (let k = 1; k <= count; k++) {
 		target += base + (k <= extra ? 1 : 0);
 		let end = target;
-		while (end > at && end < total && (bytes[end] & 0xC0) == 0x80) { end -= 1; }
+		while (end > at && end < total && isTrail(bytes[end] as int32)) { end -= 1; }
 		if (crlf && end > at && end < total && bytes[end - 1] == RETURN) { end -= 1; }
 		if (end == at) { continue; }
 		out.push(leafFrom(bytes, at, end, crlf));
@@ -311,7 +309,7 @@ function sampleText(seed: uint32, bytes: int32): string {
 
 function boundaryAt(text: string, at: int32): int32 {
 	let b = at;
-	while (b > 0 && b < text.byteLength && isContinuation(text, b)) { b -= 1; }
+	while (b > 0 && b < text.byteLength && isTrail(text.byteAt(b))) { b -= 1; }
 	return b;
 }
 

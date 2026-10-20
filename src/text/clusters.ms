@@ -31,7 +31,7 @@ function inRanges(ranges: Readonly<Span<int32>>, codePoint: int32): boolean {
 	return false;
 }
 
-function isTrail(byte: int32): boolean { return (byte & 0xC0) == 0x80; }
+export function isTrail(byte: int32): boolean { return (byte & 0xC0) == 0x80; }
 
 function stepIn(bytes: Readonly<Span<uint8>>, at: int32): int32 {
 	const lead = bytes[at] as int32;
