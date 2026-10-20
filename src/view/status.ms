@@ -81,9 +81,7 @@ test "the left side gives way from its start so the right side stays whole" {
 }
 
 test "the go-to help names the target line, or the current one when there is none" {
-	const doc = new Document("a
-bc
-d");
+	const doc = new Document("a\nbc\nd");
 	const at = single(3);
 	assert goToHelp(doc, at, null) == "Current line 2 of 3, character 2";
 	assert goToHelp(doc, at, { line: 9, character: 0, relative: 0 }) == "Go to line 3";

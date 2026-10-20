@@ -754,8 +754,7 @@ test "up and down keep the goal column across a short line" {
 
 test "up and down move by wrapped rows and keep the cell within the row" {
 	const run = runner();
-	const e = editorAt("one two three four
-ab", [2]);
+	const e = editorAt("one two three four\nab", [2]);
 	run(e, "toggleWrap");
 	run(e, "down");
 	assert heads(e) == "10";
@@ -828,14 +827,11 @@ test "copy with no selection takes the line and paste spreads lines over cursors
 test "save hands over the file text with the line ending the file had" {
 	const saved: string[] = [];
 	const run = runner(saved);
-	const e = editorAt("a
-b", [1]);
+	const e = editorAt("a\r\nb", [1]);
 	run(e, "newline");
 	run(e, "save");
 	assert saved.length == 1;
-	assert saved[0] == "a
-
-b";
+	assert saved[0] == "a\r\n\r\nb";
 }
 
 test "a save leaves the editor clean only when the file was written" {
@@ -1079,7 +1075,7 @@ test "home and end stop at the wrapped row's ends before the line's" {
 
 test "home from inside the indent goes to the line start" {
 	const run = runner();
-	const e = editorAt("		ab", [1]);
+	const e = editorAt("\t\tab", [1]);
 	run(e, "home");
 	assert heads(e) == "0";
 	run(e, "home");
