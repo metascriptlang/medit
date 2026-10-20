@@ -85,6 +85,7 @@ export function defaultKeymap(): Keymap {
 		["PageUp", "pageUp"], ["PageDown", "pageDown"],
 		["shift+PageUp", "selectPageUp"], ["shift+PageDown", "selectPageDown"],
 		["ctrl+a", "selectAll"], ["ctrl+l", "selectLine"], ["ctrl+d", "selectNextOccurrence"],
+		["ctrl+shift+l", "selectAllOccurrences"], ["ctrl+F2", "selectAllOccurrences"],
 		["ctrl+alt+ArrowUp", "addCursorAbove"], ["ctrl+alt+ArrowDown", "addCursorBelow"],
 		["Escape", "collapse"], ["alt+z", "toggleWrap"],
 		["Enter", "newline"], ["shift+Enter", "newline"], ["NumpadEnter", "newline"],

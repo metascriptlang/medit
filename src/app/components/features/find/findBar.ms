@@ -3,7 +3,8 @@ import { NeonEvent } from "../../../../../../neon/src/render/event";
 import { createStyles, styleOf } from "../../../../../../neon/src/macros/ui/style";
 import { Show } from "../../../../../../neon/src/macros/ui/flow";
 import { Text, View } from "../../../../../../neon/src/components/primitives";
-import { MUTED, PADDING, PANEL } from "../../../theme";
+import { TextSpan } from "../../../../../../neon/src/render/hostTypes";
+import { FOREGROUND, MUTED, PADDING, PANEL } from "../../../theme";
 import { Field } from "../../ui/field";
 import { Finder } from "./finder";
 
@@ -20,6 +21,23 @@ const styles = createStyles({
 	note: { fontSize: 12, color: MUTED },
 });
 
+function status(finder: Finder, moved: () => void): TextSpan[] {
+	const toggle = (label: string, on: boolean, flip: () => void): TextSpan => ({
+		text: label,
+		style: { color: on ? FOREGROUND : MUTED },
+		onPress: (e: NeonEvent): void => {
+			flip();
+			moved();
+		},
+	});
+	return [
+		{ text: `${finder.note()}   ` },
+		toggle("Aa", finder.caseSensitive(), finder.toggleCase),
+		{ text: " " },
+		toggle("Word", finder.wholeWord(), finder.toggleWord),
+	];
+}
+
 export function FindBar(props: {
 	finder: Finder;
 	moved: () => void;
@@ -33,8 +51,21 @@ export function FindBar(props: {
 	const findKey = (e: NeonEvent): void => {
 		match (e.key) {
 			"Escape" => { close(); }
+			"Enter" when e.altKey => {
+				finder.selectAll();
+				props.moved();
+				props.closed();
+			}
 			"Enter" | "F3" => {
 				finder.again(e.shiftKey);
+				props.moved();
+			}
+			"c" when e.altKey => {
+				finder.toggleCase();
+				props.moved();
+			}
+			"w" when e.altKey => {
+				finder.toggleWord();
 				props.moved();
 			}
 			_ => {}
@@ -71,7 +102,10 @@ export function FindBar(props: {
 					onKeyDown={replaceKey}
 				/>
 			</Show>
-			<Text style={styles.note}>{finder.note()}</Text>
+			<Text
+				style={styles.note}
+				spans={status(finder, props.moved)}
+			/>
 		</View>
 	</Show>;
 }

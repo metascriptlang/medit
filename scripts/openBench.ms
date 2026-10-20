@@ -1,6 +1,6 @@
 import { argv, exit } from "std/process";
 import { Document } from "../src/model/document";
-import { allMatches } from "../src/model/find";
+import { Query, allMatches, exact } from "../src/model/find";
 import { columnOf } from "../src/model/motion";
 import { Viewport, scrolledBy } from "../src/view/viewport";
 import { rowPieces, rowsOf } from "../src/view/wrap";
@@ -82,8 +82,12 @@ for (let i = 0; i < KEYSTROKES; i++) {
 report("keystroke", microsecondsEach(start, KEYSTROKES), KEYSTROKE_BUDGET_US, "us");
 
 start = performance.now();
-const hits = allMatches(doc, "beta) + 42").length;
+const hits = allMatches(doc, exact("beta) + 42")).length;
 console.log(`find all: ${millisecondsSince(start)} ms for ${hits} matches`);
+const loose: Query = { text: "BETA) + 42", caseSensitive: false, wholeWord: true };
+start = performance.now();
+const looseHits = allMatches(doc, loose).length;
+console.log(`find all, any case, whole word: ${millisecondsSince(start)} ms for ${looseHits} matches`);
 start = performance.now();
 sum += doc.fileText().byteLength;
 console.log(`file text for a save, CRLF restored: ${millisecondsSince(start)} ms (${sum})`);

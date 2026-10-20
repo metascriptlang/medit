@@ -6,7 +6,8 @@ import { ForList, Show } from "../../../../../../neon/src/macros/ui/flow";
 import { PixelRatio } from "../../../../../../neon/src/api/pixelRatio";
 import { View, ViewHandle } from "../../../../../../neon/src/components/primitives";
 import { Editor } from "../../../../model/editor";
-import { primaryRange } from "../../../../model/selection";
+import { Sel, primaryRange, span } from "../../../../model/selection";
+import { Query, matchesIn } from "../../../../model/find";
 import {
 	Clip,
 	Context,
@@ -81,10 +82,19 @@ export function EditorPane(props: {
 		if (view.cols != cols) { view = view.resized(view.rows, cols, doc.lineCount(), rowsIn); }
 	};
 
+	const marked = (): Sel[] => {
+		const q = finder.searched();
+		if (q === null || frame.length == 0) { return []; }
+		const n = (q as Query).text.byteLength;
+		const to = Math.min(doc.length(), frame[frame.length - 1].to + n);
+		return doc.matchesIn(q as Query, frame[0].from, to)
+			.map((at: int32): Sel => span(at, at + n));
+	};
+
 	const paint = (): void => {
 		fit();
 		frame = framed(doc, view, wrapWidth());
-		const p = painted(doc, editor.selections, frame, view, syntax, grid);
+		const p = painted(doc, editor.selections, marked(), frame, view, syntax, grid);
 		fill(rows, p.rows);
 		fill(shades, p.shades);
 		fill(carets, p.carets);

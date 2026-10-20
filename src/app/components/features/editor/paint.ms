@@ -1,6 +1,6 @@
 import { TextSpan } from "../../../../../../neon/src/render/hostTypes";
 import { Document } from "../../../../model/document";
-import { Selections, end, isEmpty, primaryRange, start } from "../../../../model/selection";
+import { Sel, Selections, end, isEmpty, primaryRange, start } from "../../../../model/selection";
 import { cellsBetween } from "../../../../model/motion";
 import { Viewport } from "../../../../view/viewport";
 import { VisualRow, cellIn, holds, rowPieces, rowsOf } from "../../../../view/wrap";
@@ -9,6 +9,7 @@ import {
 	CARET,
 	CURRENT_LINE,
 	CURRENT_NUMBER,
+	MATCH,
 	MUTED,
 	SELECTION,
 	colorOf,
@@ -52,6 +53,7 @@ export function framed(doc: Document, view: Viewport, wrapWidth: int32): VisualR
 export function painted(
 	doc: Document,
 	selections: Selections,
+	marks: Sel[],
 	frame: VisualRow[],
 	view: Viewport,
 	syntax: Syntax | null,
@@ -85,10 +87,29 @@ export function painted(
 		height: rowHeight,
 		color,
 	});
+	const shade = (s: Sel, color: string, out: Box[]): void => {
+		for (let i = 0; i < (frame.length as int32); i++) {
+			const r = frame[i];
+			const lo = Math.max(s.start(), r.from);
+			const hi = Math.min(s.end(), r.to);
+			const newline = r.last && s.start() <= r.to && s.end() > r.to;
+			if (lo < hi || (newline && lo <= hi)) {
+				const from = cellIn(doc, r, lo);
+				const to = from + doc.cellsBetween(lo, hi, r.cell + from) + (newline ? 1 : 0);
+				const left = Math.max(from, view.left);
+				const right = Math.min(to, view.left + view.cols);
+				if (left < right) {
+					out.push(at(i, left - view.left, (right - left) * cellWidth, color));
+				}
+			}
+		}
+	};
 	const bands: Box[] = [];
+	const found: Box[] = [];
 	const shades: Box[] = [];
 	const carets: Box[] = [];
 	let primary: Box | null = null;
+	for (const m of marks) { shade(m, MATCH, found); }
 	for (const s of selections.ranges) {
 		if (s.end() < top || s.start() > bottom + 1) { continue; }
 		for (let i = 0; i < (frame.length as int32); i++) {
@@ -100,19 +121,8 @@ export function painted(
 				if (s.isEmpty()) { bands.push(at(i, 0, view.cols * cellWidth, CURRENT_LINE)); }
 				if (s.head == head) { primary = caret; }
 			}
-			const lo = Math.max(s.start(), r.from);
-			const hi = Math.min(s.end(), r.to);
-			const newline = r.last && s.start() <= r.to && s.end() > r.to;
-			if (lo < hi || (newline && lo <= hi)) {
-				const from = cellIn(doc, r, lo);
-				const to = from + doc.cellsBetween(lo, hi, r.cell + from) + (newline ? 1 : 0);
-				const left = Math.max(from, view.left);
-				const right = Math.min(to, view.left + view.cols);
-				if (left < right) {
-					shades.push(at(i, left - view.left, (right - left) * cellWidth, SELECTION));
-				}
-			}
 		}
+		shade(s, SELECTION, shades);
 	}
-	return { rows, shades: bands.concat(shades), carets, primary };
+	return { rows, shades: bands.concat(found).concat(shades), carets, primary };
 }

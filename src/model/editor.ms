@@ -16,6 +16,8 @@ export function mapThrough(offset: int32, changes: Span<Change>, bias: Bias): in
 export class Editor {
 	doc: Document;
 	selections: Selections = single(0);
+	caseSensitive: boolean = false;
+	wordwiseNext: Selections | null = null;
 	private undos: Vec<Step> = [];
 	private redos: Vec<Step> = [];
 	private depth: int32 = 0;

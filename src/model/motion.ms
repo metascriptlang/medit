@@ -55,6 +55,10 @@ function classOf(code: int32): CharClass {
 	};
 }
 
+export function isWordByte(code: int32): boolean {
+	return classOf(code) == CharClass.Word;
+}
+
 function classAt(this doc: Document, at: int32): CharClass {
 	return at >= 0 && at < doc.length() ? classOf(doc.byteAt(at)) : CharClass.Newline;
 }

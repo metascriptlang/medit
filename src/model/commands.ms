@@ -11,8 +11,8 @@ import {
 	wordLeft,
 	wordRight,
 } from "./motion";
-import { Sel, cursorAt, primaryRange, single, span } from "./selection";
-import { nextMatch } from "./find";
+import { Sel, Selections, cursorAt, primaryRange, sameSelections, single, span } from "./selection";
+import { Query, nextMatch, selectAllMatches } from "./find";
 import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
@@ -292,13 +292,35 @@ function selectNextOccurrence(e: Editor, cx: Context): void {
 	const primary = e.selections.primaryRange();
 	if (primary.isEmpty()) {
 		const word = wordSpan(e.doc, primary.head);
-		if (!word.isEmpty()) { replacePrimary(e, word); }
+		if (!word.isEmpty()) {
+			replacePrimary(e, word);
+			e.wordwiseNext = e.selections;
+		}
 		return;
 	}
-	const needle = e.doc.slice(primary.start(), primary.end());
-	const at = nextMatch(e.doc, needle, ranges[ranges.length - 1].end());
+	const wordwise = e.wordwiseNext !== null
+		&& e.selections.sameSelections(e.wordwiseNext as Selections);
+	const q: Query = {
+		text: e.doc.slice(primary.start(), primary.end()),
+		caseSensitive: e.caseSensitive,
+		wholeWord: wordwise,
+	};
+	const at = nextMatch(e.doc, q, ranges[ranges.length - 1].end());
 	if (ranges.some((s: Sel): boolean => s.start() == at)) { return; }
-	addPrimary(e, span(at, at + needle.byteLength));
+	addPrimary(e, span(at, at + q.text.byteLength));
+	if (wordwise) { e.wordwiseNext = e.selections; }
+}
+
+function selectAllOccurrences(e: Editor, cx: Context): void {
+	const primary = e.selections.primaryRange();
+	const s = primary.isEmpty() ? wordSpan(e.doc, primary.head) : primary;
+	if (s.isEmpty()) { return; }
+	const q: Query = {
+		text: e.doc.slice(s.start(), s.end()),
+		caseSensitive: e.caseSensitive,
+		wholeWord: primary.isEmpty(),
+	};
+	const _n = e.selectAllMatches(q);
 }
 
 function selectLine(e: Editor, cx: Context): void {
@@ -331,6 +353,7 @@ export function commands(): Map<string, Command> {
 	});
 	table.set("selectLine", selectLine);
 	table.set("selectNextOccurrence", selectNextOccurrence);
+	table.set("selectAllOccurrences", selectAllOccurrences);
 	table.set("addCursorAbove", (e: Editor, cx: Context): void => { addCursor(e, -1); });
 	table.set("addCursorBelow", (e: Editor, cx: Context): void => { addCursor(e, 1); });
 	table.set("collapse", (e: Editor, cx: Context): void => {
@@ -572,6 +595,32 @@ test "next occurrence selects the word, then the next match, wrapping" {
 	run(e, "selectNextOccurrence");
 	assert heads(e) == "0-3,8-11,12-15";
 	assert e.selections.primary == 0;
+}
+
+test "next occurrence from a caret takes whole words, ASCII case aside" {
+	const run = runner();
+	const e = editorAt("foo food Foo foo", [1]);
+	run(e, "selectNextOccurrence");
+	run(e, "selectNextOccurrence");
+	assert heads(e) == "0-3,9-12";
+	run(e, "selectNextOccurrence");
+	assert heads(e) == "0-3,9-12,13-16";
+}
+
+test "next occurrence from a selection takes any match" {
+	const run = runner();
+	const e = editorAt("foo food", [0]);
+	e.select({ ranges: [span(0, 3)], primary: 0 });
+	run(e, "selectNextOccurrence");
+	assert heads(e) == "0-3,4-7";
+}
+
+test "all occurrences from a caret select every whole word" {
+	const run = runner();
+	const e = editorAt("ab abc ab", [7]);
+	run(e, "selectAllOccurrences");
+	assert heads(e) == "0-2,7-9";
+	assert e.selections.primary == 1;
 }
 
 test "a cursor added below lands at the same column" {
