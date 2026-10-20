@@ -1,6 +1,12 @@
 import { Rope } from "../text/rope";
 
 export const LOG_SIZE: int32 = 256;
+const RETURN: int32 = 13;
+
+function breaksWithCrlf(text: string): boolean {
+	const at = text.byteIndexOf("\n");
+	return at > 0 && text.byteAt(at - 1) == RETURN;
+}
 
 export struct Edit {
 	from: int32;
@@ -71,9 +77,11 @@ export class Document {
 	private log: LoggedChange[];
 	private anchors: AnchorSlot[];
 	private freeSlots: int32[];
+	private crlf: boolean;
 
 	constructor(text: string) {
 		this.rope = new Rope(text);
+		this.crlf = breaksWithCrlf(text);
 		this.current = 0;
 		this.log = [];
 		this.anchors = [];
@@ -91,19 +99,25 @@ export class Document {
 	byteAt(offset: int32): int32 { return this.rope.byteAt(offset); }
 	text(): string { return this.rope.text(); }
 
+	fileText(): string {
+		const text = this.rope.text();
+		return this.crlf ? text.replaceAll("\n", "\r\n") : text;
+	}
+
 	splice(edit: Edit): Edit {
+		const text = edit.text.byteIndexOf("\r") < 0 ? edit.text : edit.text.replaceAll("\r\n", "\n");
 		const removed = this.rope.slice(edit.from, edit.to);
 		const line = this.rope.lineOf(edit.from);
 		const start: Point = { line, column: edit.from - this.rope.lineStart(line) };
-		this.rope.replace(edit.from, edit.to, edit.text);
+		this.rope.replace(edit.from, edit.to, text);
 		const change: Change = {
 			from: edit.from,
 			removed: edit.to - edit.from,
-			inserted: edit.text.byteLength,
+			inserted: text.byteLength,
 		};
 		this.current += 1;
 		if ((this.log.length as int32) == LOG_SIZE) { this.log.shift(); }
-		this.log.push({ change, start, oldEnd: pointAfter(start, removed), newEnd: pointAfter(start, edit.text) });
+		this.log.push({ change, start, oldEnd: pointAfter(start, removed), newEnd: pointAfter(start, text) });
 		for (let i = 0; i < this.anchors.length; i++) {
 			const slot = this.anchors[i];
 			if (slot.live) { this.anchors[i] = { ...slot, offset: mapOffset(slot.offset, change, slot.bias) }; }
@@ -161,6 +175,17 @@ test "splice returns the edit that undoes it" {
 	const _back = d.splice(inverse);
 	assert d.text() == "hello world";
 	assert d.version() == 2;
+}
+
+test "a file keeps the line ending its first break uses, and inserted CRLF becomes LF" {
+	const d = new Document("a\r\nb\r\n");
+	assert d.text() == "a\nb\n";
+	const inverse = d.splice({ from: 2, to: 2, text: "x\r\ny" });
+	assert d.text() == "a\nx\nyb\n";
+	assert inverse.to == 5;
+	assert d.fileText() == "a\r\nx\r\nyb\r\n";
+	assert new Document("a\nb\r\n").fileText() == "a\nb\n";
+	assert new Document("one line").fileText() == "one line";
 }
 
 test "the log answers what changed since a version" {

@@ -222,7 +222,8 @@ function cut(e: Editor, cx: Context): void {
 	else { e.replaceSelections(""); }
 }
 
-export function paste(e: Editor, text: string): void {
+export function paste(e: Editor, pasted: string): void {
+	const text = pasted.replaceAll("\r\n", "\n");
 	const parts = text.split("\n");
 	const count = e.selections.ranges.length;
 	if (count > 1 && parts.length == count) {
@@ -521,6 +522,10 @@ test "copy with no selection takes the line and paste spreads lines over cursors
 	const m = editorAt("x\ny", [1, 3]);
 	paste(m, "A\nB");
 	assert m.doc.text() == "xA\nyB";
+	const w = editorAt("x\ny", [1, 3]);
+	paste(w, "A\r\nB\r\n");
+	assert w.doc.text() == "xA\nyB";
+	assert heads(w) == "2,5";
 }
 
 test "typed letters undo as one word" {

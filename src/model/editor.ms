@@ -89,8 +89,9 @@ export class Editor {
 			lastTo = e.to;
 			const from = e.from + delta;
 			const to = e.to + delta;
-			const inserted = e.text.byteLength;
-			this.pending.push(this.doc.splice({ from, to, text: e.text }));
+			const inverse = this.doc.splice({ from, to, text: e.text });
+			const inserted = inverse.to - inverse.from;
+			this.pending.push(inverse);
 			applied.push({ from, removed: to - from, inserted });
 			delta += inserted - (to - from);
 		}
@@ -172,6 +173,14 @@ test "typing at several cursors inserts at each and moves each cursor" {
 	assert e.selections.ranges[0].head == 2;
 	assert e.selections.ranges[1].head == 6;
 	assert e.selections.ranges[2].head == 10;
+}
+
+test "inserted CRLF lands as LF and later cursors shift by what landed" {
+	const e = editorWith("ab\ncd", [1, 4]);
+	e.replaceSelections("X\r\nY");
+	assert e.doc.text() == "aX\nYb\ncX\nYd";
+	assert e.selections.ranges[0].head == 4;
+	assert e.selections.ranges[1].head == 10;
 }
 
 test "typing over selections replaces each range" {
