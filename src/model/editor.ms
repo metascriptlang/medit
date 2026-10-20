@@ -16,8 +16,8 @@ export function mapThrough(offset: int32, changes: Change[], bias: Bias): int32 
 export class Editor {
 	doc: Document;
 	selections: Selections = single(0);
-	private undos: Step[] = [];
-	private redos: Step[] = [];
+	private undos: Vec<Step> = [];
+	private redos: Vec<Step> = [];
 	private depth: int32 = 0;
 	private pending: Edit[] = [];
 	private pendingBefore: Selections = single(0);
@@ -115,31 +115,21 @@ export class Editor {
 
 	canUndo(): boolean { return this.undos.length > 0; }
 	canRedo(): boolean { return this.redos.length > 0; }
+	undo(): boolean { return this.travel(this.undos, this.redos, "undo"); }
+	redo(): boolean { return this.travel(this.redos, this.undos, "redo"); }
 
-	undo(): boolean {
-		if (this.depth > 0) { throw new Error("Editor.undo: a transaction is open"); }
-		if (this.undos.length == 0) { return false; }
-		const step = this.undos.pop();
-		this.redos.push({ ...step, edits: this.replay(step.edits) });
+	private travel(ref from: Vec<Step>, ref into: Vec<Step>, who: string): boolean {
+		if (this.depth > 0) { throw new Error(`Editor.${who}: a transaction is open`); }
+		if (from.length == 0) { return false; }
+		const step = from.pop();
+		const inverses: Edit[] = [];
+		for (let i = step.edits.length - 1; i >= 0; i--) {
+			inverses.push(this.doc.splice(step.edits[i]));
+		}
+		into.push({ edits: inverses, before: step.after, after: step.before });
 		this.selections = step.before;
 		this.lastGroup = "";
 		return true;
-	}
-
-	redo(): boolean {
-		if (this.depth > 0) { throw new Error("Editor.redo: a transaction is open"); }
-		if (this.redos.length == 0) { return false; }
-		const step = this.redos.pop();
-		this.undos.push({ ...step, edits: this.replay(step.edits) });
-		this.selections = step.after;
-		this.lastGroup = "";
-		return true;
-	}
-
-	private replay(edits: Edit[]): Edit[] {
-		const inverses: Edit[] = [];
-		for (let i = edits.length - 1; i >= 0; i--) { inverses.push(this.doc.splice(edits[i])); }
-		return inverses;
 	}
 }
 
@@ -207,6 +197,25 @@ test "redo replays what undo took back, and a new edit clears redo" {
 	e.replaceSelections("!");
 	assert !e.canRedo();
 	assert e.doc.text() == "abc!";
+}
+
+test "undo and redo restore each side's selections, round after round" {
+	const e = editorWith("ab", [1]);
+	e.replaceSelections("X");
+	e.select(single(0));
+	e.replaceSelections("Y");
+	for (let round = 0; round < 2; round++) {
+		assert e.undo();
+		assert e.selections.ranges[0].head == 0;
+		assert e.undo();
+		assert e.selections.ranges[0].head == 1;
+		assert e.doc.text() == "ab";
+		assert e.redo();
+		assert e.selections.ranges[0].head == 2;
+		assert e.redo();
+		assert e.selections.ranges[0].head == 1;
+		assert e.doc.text() == "YaXb";
+	}
 }
 
 test "nested transactions make one step" {
