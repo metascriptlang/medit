@@ -6,7 +6,7 @@ import { createList, List } from "../../../neon/src/core/list";
 import { ForList, Show } from "../../../neon/src/macros/ui/flow";
 import { PixelRatio } from "../../../neon/src/api/pixelRatio";
 import { TextSpan } from "../../../neon/src/render/hostTypes";
-import { Void, View, Text, ViewHandle } from "../../../neon/src/components/primitives";
+import { Void, View, Text, TextInput, TextInputHandle, ViewHandle } from "../../../neon/src/components/primitives";
 import { Viewport } from "../view/viewport";
 import { VisualRow, cellIn, holds, offsetIn, rowIndexOf, rowPieces, rowsOf } from "../view/wrap";
 import { Tone } from "../view/tone";
@@ -14,6 +14,7 @@ import { Syntax, covers } from "../syntax/syntax";
 import { Document } from "../model/document";
 import { Editor } from "../model/editor";
 import { Clip, Command, Context, Gesture, commands, drag, insertText, press } from "../model/commands";
+import { replaceAll, replaceMatch, selectFirstMatch, selectMatch } from "../model/find";
 import { cellsBetween } from "../model/motion";
 import { end, isEmpty, start } from "../model/selection";
 import { Outcome, defaultKeymap } from "../input/keymap";
@@ -23,6 +24,10 @@ const FOREGROUND = "#cdd6f4";
 const SELECTION = "#45475a";
 const CURRENT_LINE = "#2a2b3c";
 const GUTTER = "#6c7086";
+const PANEL = "#181825";
+const FIELD = "#313244";
+const FIND_WIDTH: number = 360;
+const FIELD_HEIGHT: number = 26;
 const GUTTER_CURRENT = "#bac2de";
 const CARET = "#f5e0dc";
 const PADDING: number = 6;
@@ -110,6 +115,12 @@ export function App(
 	const [caretX, setCaretX] = createSignal<number>(0);
 	const [caretY, setCaretY] = createSignal<number>(0);
 	const [blinkOn, setBlinkOn] = createSignal<boolean>(true);
+	const [finding, setFinding] = createSignal<boolean>(false);
+	const [replacing, setReplacing] = createSignal<boolean>(false);
+	const [query, setQuery] = createSignal<string>("");
+	const [replacement, setReplacement] = createSignal<string>("");
+	const [findNote, setFindNote] = createSignal<string>("");
+	let findInput: TextInputHandle | null = null;
 	const rows: List<Row> = createList<Row>([]);
 	const shades: List<Box> = createList<Box>([]);
 	const carets: List<Box> = createList<Box>([]);
@@ -225,6 +236,57 @@ export function App(
 		paint();
 	};
 
+	const searched = (hit: boolean): void => {
+		setFindNote(hit ? "" : "no match");
+		reveal();
+	};
+
+	const openFind = (replace: boolean): void => {
+		const s = editor.selections.ranges[editor.selections.primary];
+		if (!s.isEmpty() && doc.lineOf(s.start()) == doc.lineOf(s.end())) { setQuery(doc.slice(s.start(), s.end())); }
+		setFindNote("");
+		setReplacing(replace);
+		setFinding(true);
+		const input = findInput;
+		if (input !== null) { (input as TextInputHandle).focus(); }
+	};
+
+	const closeFind = (): void => {
+		setFinding(false);
+		findInput = null;
+		const a = area;
+		if (a !== null) { (a as ViewHandle).focus(); }
+	};
+
+	const findAgain = (backwards: boolean): void => {
+		if (query() == "") { openFind(false); }
+		else { searched(selectMatch(editor, query(), backwards)); }
+	};
+
+	const queried = (text: string): void => {
+		setQuery(text);
+		if (text == "") { setFindNote(""); }
+		else { searched(selectFirstMatch(editor, text)); }
+	};
+
+	const findKey = (e: NeonEvent): void => {
+		if (e.key == "Escape") { closeFind(); }
+		else if (e.key == "Enter" || e.key == "F3") { findAgain(e.shiftKey); }
+	};
+
+	const replaceKey = (e: NeonEvent): void => {
+		if (e.key == "Escape") { closeFind(); }
+		else if (e.key == "Enter" && query() != "") {
+			if (e.ctrlKey && e.altKey) {
+				const n = replaceAll(editor, query(), replacement());
+				setFindNote(n == 1 ? "1 replaced" : `${n} replaced`);
+				reveal();
+			} else {
+				searched(replaceMatch(editor, query(), replacement()));
+			}
+		}
+	};
+
 	const cx: Context = {
 		pageRows: (): int32 => Math.max(1, view.rows - 1),
 		wrapWidth,
@@ -242,6 +304,8 @@ export function App(
 			},
 		},
 		save: store,
+		findBar: openFind,
+		findAgain,
 	};
 
 	const layout = (e: NeonEvent): void => {
@@ -412,6 +476,43 @@ export function App(
 					),
 				})}
 			</View>
+			{Show({
+				when: finding,
+				children: element(
+					<View
+						style={{
+							position: "absolute", top: PADDING, right: PADDING * 3, width: FIND_WIDTH,
+							padding: 6, gap: 4, backgroundColor: PANEL,
+						}}>
+						<TextInput
+							style={{ height: FIELD_HEIGHT, paddingLeft: 6, backgroundColor: FIELD, color: FOREGROUND, fontSize: FONT_SIZE }}
+							value={query()}
+							placeholder="Find"
+							placeholderTextColor={GUTTER}
+							ref={(h: TextInputHandle): void => {
+								findInput = h;
+								h.focus();
+							}}
+							onChangeText={queried}
+							onKeyDown={findKey}
+						/>
+						{Show({
+							when: replacing,
+							children: element(
+								<TextInput
+									style={{ height: FIELD_HEIGHT, paddingLeft: 6, backgroundColor: FIELD, color: FOREGROUND, fontSize: FONT_SIZE }}
+									value={replacement()}
+									placeholder="Replace"
+									placeholderTextColor={GUTTER}
+									onChangeText={(t: string): void => { setReplacement(t); }}
+									onKeyDown={replaceKey}
+								/>
+							),
+						})}
+						<Text style={{ fontSize: 12, color: GUTTER }}>{findNote()}</Text>
+					</View>
+				),
+			})}
 		</Void>
 	);
 }
