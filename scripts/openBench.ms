@@ -1,5 +1,6 @@
 import { argv, exit } from "std/process";
 import { Document } from "../src/model/document";
+import { enclosingBrackets } from "../src/model/brackets";
 import { Query, allMatches, exact } from "../src/model/find";
 import { columnOf } from "../src/model/motion";
 import { Viewport, scrolledBy } from "../src/view/viewport";
@@ -64,10 +65,12 @@ for (let frame = 0; frame < FRAMES; frame++) {
 			drawn += 1;
 		}
 	}
+	const caret = doc.lineStart(view.line + 20);
 	sum += columnOf(doc, doc.lineEnd(view.line + 20));
+	sum += doc.enclosingBrackets(caret, caret) === null ? 0 : 1;
 }
 report(
-	"scroll frame: 3 rows down, 40 wrapped rows drawn, a caret column",
+	"scroll frame: 3 rows down, 40 wrapped rows drawn, a caret column, the brackets around it",
 	microsecondsEach(start, FRAMES),
 	FRAME_BUDGET_US,
 	"us",

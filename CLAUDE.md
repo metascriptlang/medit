@@ -32,6 +32,9 @@ usual.
 - The document holds LF only: `splice` turns inserted CRLF into LF, and `fileText` gives a file
   back CRLF when its first line break was CRLF. A lone CR stays and draws as ␍. A desktop save
   writes `<path>.medic-save` and renames it over the file, so a failed write leaves the file whole.
+- Bracket matching (`src/model/brackets.ms`) scans bytes within `BRACKET_REACH` of the caret and
+  counts brackets inside strings and comments too; the syntax tree can tell them apart once it
+  covers every language medic opens.
 - `src/syntax` compiles vendored C: the tree-sitter runtime and recompiler's MetaScript grammar,
   versions in `vendor/SOURCES`.
   `sh scripts/vendorSyntax.sh` re-vendors both and regenerates `src/syntax/highlights.ms`. The C
@@ -55,7 +58,8 @@ Run from the repository root: fonts are loaded by relative path.
 - Open cost: `msc run --release scripts/openBench.ms -- <megabytes>` times the document build, a
   scroll frame, a keystroke, a find over the whole file and a save's file text on generated text,
   and exits 1 when one of the first three passes its `*_BUDGET_*` constant. At 100 MB on
-  2026-10-20: document 281 ms, scroll frame 110 us, keystroke 10 us, file text 490 ms. Find of
+  2026-10-20: document 281 ms, scroll frame 110 us, keystroke 10 us, file text 490 ms; the frame
+  took 135 us on 2026-10-21 once it also looked for the brackets around its caret. Find of
   1.28 M matches on 2026-10-21: 113 ms exact, 269 ms ignoring case and taking whole words; the find
   bar counts every match on each keystroke, so these are its per-keystroke cost at that size.
 - Highlight cost: `msc run --release scripts/syntaxBench.ms -- <file>` times the first parse, a
