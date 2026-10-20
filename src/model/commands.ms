@@ -198,16 +198,16 @@ function newline(e: Editor, cx: Context): void {
 	const texts: string[] = [];
 	for (const s of e.selections.ranges) {
 		const line = e.doc.lineOf(s.start());
-		const indent = Math.min(indentEnd(e.doc, line), s.start());
-		texts.push("\n" + e.doc.slice(e.doc.lineStart(line), indent));
+		const kept = Math.min(indentEnd(e.doc, line), s.start());
+		texts.push("\n" + e.doc.slice(e.doc.lineStart(line), kept));
 	}
 	e.replaceEach(texts);
 }
 
 function indent(e: Editor): void {
 	const edits: Edit[] = [];
-	for (const l of touchedLines(e)) {
-		const at = e.doc.lineStart(l);
+	for (const line of touchedLines(e)) {
+		const at = e.doc.lineStart(line);
 		edits.push({ from: at, to: at, text: "\t" });
 	}
 	rewriteLines(e, edits);
@@ -434,9 +434,9 @@ function runner(saved: string[] = []): (e: Editor, name: string) => void {
 		findAgain: (backwards: boolean): void => {},
 	};
 	return (e: Editor, name: string): void => {
-		const c = table.get(name);
-		if (c === undefined) { throw new Error(`no command ${name}`); }
-		(c as Command)(e, cx);
+		const command = table.get(name);
+		if (command === undefined) { throw new Error(`no command ${name}`); }
+		command(e, cx);
 	};
 }
 
