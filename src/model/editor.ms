@@ -31,7 +31,9 @@ export class Editor {
 	select(next: Selections): void {
 		for (const s of next.ranges) {
 			if (s.start() < 0 || s.end() > this.doc.length()) {
-				throw new Error(`Editor.select: ${s.anchor}..${s.head} is outside 0..${this.doc.length()}`);
+				throw new Error(
+					`Editor.select: ${s.anchor}..${s.head} is outside 0..${this.doc.length()}`,
+				);
 			}
 		}
 		this.selections = next.normalized();
@@ -61,20 +63,27 @@ export class Editor {
 			for (const e of this.pending) { this.undos[last].edits.push(e); }
 			this.undos[last].after = this.selections;
 		} else {
-			this.undos.push({ edits: this.pending, before: this.pendingBefore, after: this.selections });
+			this.undos.push({
+				edits: this.pending,
+				before: this.pendingBefore,
+				after: this.selections,
+			});
 		}
 		this.lastGroup = this.group;
 		this.redos = [];
 	}
 
 	change(edits: Span<Edit>): Change[] {
-		if (this.depth == 0) { throw new Error("Editor.change: an edit needs an open transaction"); }
+		if (this.depth == 0) {
+			throw new Error("Editor.change: an edit needs an open transaction");
+		}
 		const applied: Change[] = [];
 		let delta = 0;
 		let lastTo = 0;
 		for (const e of edits) {
 			if (e.from < lastTo || e.from > e.to) {
-				throw new Error(`Editor.change: edit ${e.from}..${e.to} overlaps the one before or runs backwards`);
+				throw new Error(`Editor.change: edit ${e.from}..${e.to} overlaps the one before` +
+					" or runs backwards");
 			}
 			lastTo = e.to;
 			const from = e.from + delta;
@@ -89,12 +98,15 @@ export class Editor {
 	}
 
 	replaceEach(texts: Span<string>): void {
-		if (texts.length != this.selections.ranges.length) {
-			throw new Error(`Editor.replaceEach: ${texts.length} texts for ${this.selections.ranges.length} selections`);
+		const ranges = this.selections.ranges;
+		if (texts.length != ranges.length) {
+			throw new Error(
+				`Editor.replaceEach: ${texts.length} texts for ${ranges.length} selections`,
+			);
 		}
 		const edits: Edit[] = [];
 		for (let i = 0; i < texts.length; i++) {
-			const s = this.selections.ranges[i];
+			const s = ranges[i];
 			edits.push({ from: s.start(), to: s.end(), text: texts[i] });
 		}
 		this.begin();
@@ -253,7 +265,11 @@ test "typing in one place coalesces into one step until the cursor moves" {
 test "edits at several places shift by what came before" {
 	const e = editorWith("0123456789", [0]);
 	e.begin();
-	const applied = e.change([{ from: 1, to: 3, text: "" }, { from: 5, to: 5, text: "abc" }, { from: 8, to: 9, text: "Z" }]);
+	const applied = e.change([
+		{ from: 1, to: 3, text: "" },
+		{ from: 5, to: 5, text: "abc" },
+		{ from: 8, to: 9, text: "Z" },
+	]);
 	e.end();
 	assert e.doc.text() == "034abc567Z9";
 	assert applied[1].from == 3;
