@@ -36,13 +36,17 @@ export interface Context {
 
 export type Command = (e: Editor, cx: Context) => void;
 
-function moved(e: Editor, extend: boolean, target: (doc: Document, s: Sel) => int32): void {
+function reselect(e: Editor, each: (s: Sel) => Sel): void {
 	const next: Sel[] = [];
-	for (const s of e.selections.ranges) {
-		const head = target(e.doc, s);
-		next.push(extend ? span(s.anchor, head) : cursorAt(head));
-	}
+	for (const s of e.selections.ranges) { next.push(each(s)); }
 	e.select({ ranges: next, primary: e.selections.primary });
+}
+
+function moved(e: Editor, extend: boolean, target: (doc: Document, s: Sel) => int32): void {
+	reselect(e, (s: Sel): Sel => {
+		const head = target(e.doc, s);
+		return extend ? span(s.anchor, head) : cursorAt(head);
+	});
 }
 
 function stepped(e: Editor, extend: boolean, toStart: boolean, by: (doc: Document, at: int32) => int32): void {
@@ -56,8 +60,7 @@ function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 	const doc = e.doc;
 	const width = cx.wrapWidth();
 	const last = doc.lineCount() - 1;
-	const next: Sel[] = [];
-	for (const s of e.selections.ranges) {
+	reselect(e, (s: Sel): Sel => {
 		let line = doc.lineOf(s.head);
 		let lineRows = rowsOf(doc, line, width);
 		let k = rowIndexOf(lineRows, s.head);
@@ -81,9 +84,8 @@ function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 			}
 		}
 		if (head < 0) { head = offsetIn(doc, lineRows[k], goal); }
-		next.push({ anchor: extend ? s.anchor : head, head, goal });
-	}
-	e.select({ ranges: next, primary: e.selections.primary });
+		return { anchor: extend ? s.anchor : head, head, goal };
+	});
 }
 
 function linesOf(doc: Document, s: Sel): int32[] {
@@ -108,14 +110,11 @@ function rewriteLines(e: Editor, edits: Edit[]): void {
 	if (edits.length == 0) { return; }
 	e.begin();
 	const applied = e.change(edits);
-	const next: Sel[] = [];
-	for (const s of e.selections.ranges) {
-		const forward = s.anchor <= s.head;
+	reselect(e, (s: Sel): Sel => {
 		const start = mapThrough(s.start(), applied, Bias.Left);
 		const end = mapThrough(s.end(), applied, s.isEmpty() ? Bias.Left : Bias.Right);
-		next.push(forward ? span(start, end) : span(end, start));
-	}
-	e.select({ ranges: next, primary: e.selections.primary });
+		return s.anchor <= s.head ? span(start, end) : span(end, start);
+	});
 	e.end();
 }
 
@@ -273,14 +272,12 @@ function selectNextOccurrence(e: Editor): void {
 }
 
 function selectLine(e: Editor): void {
-	const next: Sel[] = [];
-	for (const s of e.selections.ranges) {
+	reselect(e, (s: Sel): Sel => {
 		const lines = linesOf(e.doc, s);
 		const last = lines[1];
 		const end = last + 1 < e.doc.lineCount() ? e.doc.lineStart(last + 1) : e.doc.length();
-		next.push(span(e.doc.lineStart(lines[0]), end));
-	}
-	e.select({ ranges: next, primary: e.selections.primary });
+		return span(e.doc.lineStart(lines[0]), end);
+	});
 }
 
 function lineEndOf(doc: Document, s: Sel): int32 { return doc.lineEnd(doc.lineOf(s.head)); }
