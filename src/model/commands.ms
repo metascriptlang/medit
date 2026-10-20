@@ -189,7 +189,7 @@ function deleteToward(group: string, by: Target): Command {
 
 export function insertText(e: Editor, text: string): void {
 	e.begin();
-	if (text.indexOf("\n") < 0) { e.groupAs("type"); }
+	if (!text.includes("\n")) { e.groupAs("type"); }
 	e.replaceSelections(text);
 	e.end();
 }
