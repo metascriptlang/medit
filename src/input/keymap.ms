@@ -91,7 +91,7 @@ export function defaultKeymap(): Keymap {
 		["Backspace", "backspace"], ["shift+Backspace", "backspace"], ["Delete", "delete"],
 		["ctrl+Backspace", "deleteWordLeft"], ["ctrl+Delete", "deleteWordRight"],
 		["ctrl+z", "undo"], ["ctrl+y", "redo"], ["ctrl+shift+z", "redo"],
-		["ctrl+c", "copy"], ["ctrl+x", "cut"], ["ctrl+v", "paste"],
+		["ctrl+c", "copy"], ["ctrl+x", "cut"], ["ctrl+v", "paste"], ["ctrl+s", "save"],
 		["ctrl+Insert", "copy"], ["shift+Delete", "cut"], ["shift+Insert", "paste"],
 	];
 	for (const p of pairs) { m.bind(p[0], p[1]); }

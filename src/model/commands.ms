@@ -28,6 +28,7 @@ export interface Context {
 	wrapWidth: () => int32;
 	toggleWrap: () => void;
 	clip: Clip;
+	save: (text: string) => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -344,6 +345,7 @@ export function commands(): Map<string, Command> {
 	m.set("copy", copy);
 	m.set("cut", cut);
 	m.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
+	m.set("save", (e: Editor, cx: Context): void => { cx.save(e.doc.fileText()); });
 	m.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -410,7 +412,7 @@ function heads(e: Editor): string {
 	return parts.join(",");
 }
 
-function runner(): (e: Editor, name: string) => void {
+function runner(saved: string[] = []): (e: Editor, name: string) => void {
 	const table = commands();
 	let clipboard = "";
 	let wrap = 0;
@@ -422,6 +424,7 @@ function runner(): (e: Editor, name: string) => void {
 			write: (text: string): void => { clipboard = text; },
 			read: (done: (text: string) => void): void => { done(clipboard); },
 		},
+		save: (text: string): void => { saved.push(text); },
 	};
 	return (e: Editor, name: string): void => {
 		const c = table.get(name);
@@ -526,6 +529,19 @@ test "copy with no selection takes the line and paste spreads lines over cursors
 	paste(w, "A\r\nB\r\n");
 	assert w.doc.text() == "xA\nyB";
 	assert heads(w) == "2,5";
+}
+
+test "save hands over the file text with the line ending the file had" {
+	const saved: string[] = [];
+	const run = runner(saved);
+	const e = editorAt("a
+b", [1]);
+	run(e, "newline");
+	run(e, "save");
+	assert saved.length == 1;
+	assert saved[0] == "a
+
+b";
 }
 
 test "typed letters undo as one word" {
