@@ -12,7 +12,12 @@ export struct Viewport {
 	pending: float64;
 }
 
-export function scrolledBy(this v: Viewport, delta: int32, lineCount: int32, rowsIn: RowCount): Viewport {
+export function scrolledBy(
+	this v: Viewport,
+	delta: int32,
+	lineCount: int32,
+	rowsIn: RowCount,
+): Viewport {
 	const last = Math.max(0, lineCount - 1);
 	let line = Math.min(v.line, last);
 	let sub = v.sub + delta;
@@ -29,7 +34,12 @@ export function scrolledBy(this v: Viewport, delta: int32, lineCount: int32, row
 	return { ...v, line, sub: Math.max(0, Math.min(sub, here - 1)) };
 }
 
-export function wheeled(this v: Viewport, notches: float64, lineCount: int32, rowsIn: RowCount): Viewport {
+export function wheeled(
+	this v: Viewport,
+	notches: float64,
+	lineCount: int32,
+	rowsIn: RowCount,
+): Viewport {
 	const total = v.pending - notches * ROWS_PER_NOTCH;
 	const whole = total as int32;
 	return { ...v.scrolledBy(whole, lineCount, rowsIn), pending: total - whole };
@@ -40,12 +50,24 @@ export function slid(this v: Viewport, notches: float64, widest: int32): Viewpor
 	return { ...v, left: Math.max(0, Math.min(left, widest - v.cols + 1)) };
 }
 
-export function resized(this v: Viewport, rows: int32, cols: int32, lineCount: int32, rowsIn: RowCount): Viewport {
+export function resized(
+	this v: Viewport,
+	rows: int32,
+	cols: int32,
+	lineCount: int32,
+	rowsIn: RowCount,
+): Viewport {
 	const sized: Viewport = { ...v, rows: Math.max(1, rows), cols: Math.max(1, cols) };
 	return sized.scrolledBy(0, lineCount, rowsIn);
 }
 
-export function revealed(this v: Viewport, line: int32, sub: int32, lineCount: int32, rowsIn: RowCount): Viewport {
+export function revealed(
+	this v: Viewport,
+	line: int32,
+	sub: int32,
+	lineCount: int32,
+	rowsIn: RowCount,
+): Viewport {
 	const target: Viewport = { ...v, line, sub };
 	if (line < v.line || (line == v.line && sub < v.sub)) { return target; }
 	let seen = -v.sub;
