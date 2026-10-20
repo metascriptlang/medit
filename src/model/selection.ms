@@ -50,8 +50,9 @@ export function normalized(this s: Selections): Selections {
 		throw new Error(`normalized: primary ${s.primary} is outside ${s.ranges.length} ranges`);
 	}
 	const primaryHead = s.ranges[s.primary].head;
-	const sorted = s.ranges.slice(0, s.ranges.length);
-	sorted.sort((a: Sel, b: Sel): number => a.start() == b.start() ? a.end() - b.end() : a.start() - b.start());
+	const sorted = s.ranges.slice(0);
+	sorted.sort((a: Sel, b: Sel) =>
+		a.start() == b.start() ? a.end() - b.end() : a.start() - b.start());
 	const merged: Sel[] = [];
 	let primary = 0;
 	for (const sel of sorted) {
