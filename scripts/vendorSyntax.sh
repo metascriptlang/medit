@@ -1,6 +1,6 @@
 #!/bin/sh
 # Copies tree-sitter's C runtime and the MetaScript grammar into vendor/, and the grammar's
-# highlight query into src/syntax/highlights.ms.
+# highlight query, without its comment lines, into src/syntax/highlights.ms.
 #   sh scripts/vendorSyntax.sh [runtime dir] [grammar dir]
 set -e
 cd "$(dirname "$0")/.."
@@ -15,12 +15,12 @@ rm -rf vendor/tree-sitter/src/wasm
 cp "$LICENSE" vendor/tree-sitter/LICENSE
 cp -r "$GRAMMAR/src/parser.c" "$GRAMMAR/src/scanner.c" "$GRAMMAR/src/tree_sitter" vendor/tree-sitter-metascript/
 {
-	echo "tree-sitter $(sed -n 's/^version = "\(.*\)"/\1/p' "$RUNTIME/Cargo.toml" | head -1), from $RUNTIME"
-	echo "tree-sitter-metascript, recompiler $(git -C "$GRAMMAR" rev-parse --short HEAD), from $GRAMMAR (MIT)"
+	echo "tree-sitter $(sed -n 's/^version = "\(.*\)"/\1/p' "$RUNTIME/Cargo.toml" | head -1)"
+	echo "tree-sitter-metascript, recompiler $(git -C "$GRAMMAR" rev-parse --short HEAD) (MIT)"
 } > vendor/SOURCES
 
 {
 	printf 'export const HIGHLIGHTS = `'
-	sed -e 's/\\/\\\\/g' -e 's/`/\\`/g' -e 's/\$[{]/\\${/g' "$GRAMMAR/queries/highlights.scm"
+	sed -e '/^[[:space:]]*;/d' -e 's/\\/\\\\/g' -e 's/`/\\`/g' -e 's/\$[{]/\\${/g' "$GRAMMAR/queries/highlights.scm"
 	printf '`;\n'
 } > src/syntax/highlights.ms
