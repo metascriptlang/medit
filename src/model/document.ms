@@ -14,6 +14,33 @@ export struct Change {
 	inserted: int32;
 }
 
+export struct Point {
+	line: int32;
+	column: int32;
+}
+
+export struct LoggedChange {
+	change: Change;
+	start: Point;
+	oldEnd: Point;
+	newEnd: Point;
+}
+
+export function pointAfter(start: Point, text: string): Point {
+	let newline = text.byteIndexOf("
+");
+	if (newline < 0) { return { line: start.line, column: start.column + text.byteLength }; }
+	let line = start.line;
+	let last = newline;
+	while (newline >= 0) {
+		line += 1;
+		last = newline;
+		newline = text.byteIndexOf("
+", newline + 1);
+	}
+	return { line, column: text.byteLength - last - 1 };
+}
+
 export enum Bias {
 	Left,
 	Right,
@@ -41,7 +68,7 @@ export function mapOffset(offset: int32, change: Change, bias: Bias): int32 {
 export class Document {
 	private rope: Rope;
 	private current: int32;
-	private log: Change[];
+	private log: LoggedChange[];
 	private anchors: AnchorSlot[];
 	private freeSlots: int32[];
 
@@ -66,6 +93,8 @@ export class Document {
 
 	splice(edit: Edit): Edit {
 		const removed = this.rope.slice(edit.from, edit.to);
+		const line = this.rope.lineOf(edit.from);
+		const start: Point = { line, column: edit.from - this.rope.lineStart(line) };
 		this.rope.replace(edit.from, edit.to, edit.text);
 		const change: Change = {
 			from: edit.from,
@@ -74,7 +103,7 @@ export class Document {
 		};
 		this.current += 1;
 		if ((this.log.length as int32) == LOG_SIZE) { this.log.shift(); }
-		this.log.push(change);
+		this.log.push({ change, start, oldEnd: pointAfter(start, removed), newEnd: pointAfter(start, edit.text) });
 		for (let i = 0; i < this.anchors.length; i++) {
 			const slot = this.anchors[i];
 			if (slot.live) { this.anchors[i] = { ...slot, offset: mapOffset(slot.offset, change, slot.bias) }; }
@@ -82,7 +111,7 @@ export class Document {
 		return { from: edit.from, to: edit.from + change.inserted, text: removed };
 	}
 
-	changesSince(version: int32): Change[] | null {
+	changesSince(version: int32): LoggedChange[] | null {
 		const behind = this.current - version;
 		if (behind < 0 || behind > (this.log.length as int32)) { return null; }
 		return this.log.slice(this.log.length - behind);
@@ -142,11 +171,27 @@ test "the log answers what changed since a version" {
 	assert since !== null;
 	if (since !== null) {
 		assert since.length == 2;
-		assert since[1].removed == 1;
+		assert since[1].change.removed == 1;
 	}
 	const none = d.changesSince(2);
 	assert none !== null;
 	if (none !== null) { assert none.length == 0; }
+}
+
+test "the log carries where each change starts and ends, in lines and byte columns" {
+	const d = new Document("ab
+cdé
+f");
+	const _e = d.splice({ from: 4, to: 8, text: "X
+YZ" });
+	const since = d.changesSince(0);
+	assert since !== null;
+	if (since !== null) {
+		const c = since[0];
+		assert c.start.line == 1 && c.start.column == 1;
+		assert c.oldEnd.line == 2 && c.oldEnd.column == 0;
+		assert c.newEnd.line == 2 && c.newEnd.column == 2;
+	}
 }
 
 test "a version older than the log asks for a full resync" {
