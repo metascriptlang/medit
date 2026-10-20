@@ -63,6 +63,9 @@ Run from the repository root: fonts are loaded by relative path.
   that directory and open `index.html` (`?gl` / `?wgpu` force a backend).
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
   header). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
+- Drive the desktop build: `pwsh scripts/desktopDrive.ps1 out/medic.exe <file> <outDir> <step>...`
+  (steps in its header, named as in `webDrive.mjs`). It sends messages to medic's own window, so the
+  window needs no focus and the screenshots show only that window.
 
 ## Gate
 
