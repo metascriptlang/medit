@@ -82,12 +82,19 @@ export function allMatches(doc: Document, needle: string): int32[] {
 	return out;
 }
 
-export function selectMatch(e: Editor, needle: string, backwards: boolean): boolean {
-	const s = e.selections.ranges[e.selections.primary];
-	const at = backwards ? prevMatch(e.doc, needle, s.start()) : nextMatch(e.doc, needle, s.end());
+function selectAt(e: Editor, needle: string, at: int32): boolean {
 	if (at < 0) { return false; }
 	e.select({ ranges: [span(at, at + needle.byteLength)], primary: 0 });
 	return true;
+}
+
+export function selectMatch(e: Editor, needle: string, backwards: boolean): boolean {
+	const s = e.selections.ranges[e.selections.primary];
+	return selectAt(e, needle, backwards ? prevMatch(e.doc, needle, s.start()) : nextMatch(e.doc, needle, s.end()));
+}
+
+export function selectFirstMatch(e: Editor, needle: string): boolean {
+	return selectAt(e, needle, nextMatch(e.doc, needle, e.selections.ranges[e.selections.primary].start()));
 }
 
 export function replaceMatch(e: Editor, needle: string, replacement: string): boolean {
@@ -170,6 +177,19 @@ test "replace takes the selected match, then selects the next one" {
 	assert e.selections.ranges[0].start() == 8 && e.selections.ranges[0].end() == 11;
 	assert !replaceMatch(e, "cat", "cow");
 	assert e.doc.text() == "cow dog cow";
+}
+
+test "the first match counts from the selection start, so a growing needle keeps its place" {
+	const e = new Editor(new Document("ab abc abcd"));
+	e.select({ ranges: [cursorAt(1)], primary: 0 });
+	assert selectFirstMatch(e, "ab");
+	assert e.selections.ranges[0].start() == 3;
+	assert selectFirstMatch(e, "abc");
+	assert e.selections.ranges[0].start() == 3;
+	assert selectFirstMatch(e, "abcd");
+	assert e.selections.ranges[0].start() == 7;
+	assert !selectFirstMatch(e, "abcde");
+	assert e.selections.ranges[0].start() == 7;
 }
 
 test "replace all is one undo step" {

@@ -30,6 +30,8 @@ export interface Context {
 	toggleWrap: () => void;
 	clip: Clip;
 	save: (text: string) => void;
+	findBar: (replace: boolean) => void;
+	findAgain: (backwards: boolean) => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -345,6 +347,10 @@ export function commands(): Map<string, Command> {
 	m.set("cut", cut);
 	m.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
 	m.set("save", (e: Editor, cx: Context): void => { cx.save(e.doc.fileText()); });
+	m.set("find", (e: Editor, cx: Context): void => { cx.findBar(false); });
+	m.set("replace", (e: Editor, cx: Context): void => { cx.findBar(true); });
+	m.set("findNext", (e: Editor, cx: Context): void => { cx.findAgain(false); });
+	m.set("findPrev", (e: Editor, cx: Context): void => { cx.findAgain(true); });
 	m.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -424,6 +430,8 @@ function runner(saved: string[] = []): (e: Editor, name: string) => void {
 			read: (done: (text: string) => void): void => { done(clipboard); },
 		},
 		save: (text: string): void => { saved.push(text); },
+		findBar: (replace: boolean): void => {},
+		findAgain: (backwards: boolean): void => {},
 	};
 	return (e: Editor, name: string): void => {
 		const c = table.get(name);
