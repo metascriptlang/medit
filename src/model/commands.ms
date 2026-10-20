@@ -15,8 +15,6 @@ import { Sel, cursorAt, single, span } from "./selection";
 import { nextMatch } from "./find";
 import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
-const TAB: int32 = 9;
-const SPACE: int32 = 32;
 const OUTDENT_SPACES: int32 = 4;
 
 export interface Clip {
@@ -215,16 +213,21 @@ function indent(e: Editor): void {
 	rewriteLines(e, edits);
 }
 
+function outdentTo(doc: Document, line: int32): int32 {
+	const from = doc.lineStart(line);
+	const end = doc.lineEnd(line);
+	if (from < end && doc.byteAt(from) == "\t".code) { return from + 1; }
+	const limit = Math.min(end, from + OUTDENT_SPACES);
+	let to = from;
+	while (to < limit && doc.byteAt(to) == " ".code) { to += 1; }
+	return to;
+}
+
 function outdent(e: Editor, cx: Context): void {
 	const edits: Edit[] = [];
-	for (const l of touchedLines(e)) {
-		const from = e.doc.lineStart(l);
-		const end = e.doc.lineEnd(l);
-		let to = from;
-		if (from < end && e.doc.byteAt(from) == TAB) { to = from + 1; }
-		else {
-			while (to < end && to - from < OUTDENT_SPACES && e.doc.byteAt(to) == SPACE) { to += 1; }
-		}
+	for (const line of touchedLines(e)) {
+		const from = e.doc.lineStart(line);
+		const to = outdentTo(e.doc, line);
 		if (to > from) { edits.push({ from, to, text: "" }); }
 	}
 	rewriteLines(e, edits);
