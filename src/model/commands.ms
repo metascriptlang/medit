@@ -392,9 +392,9 @@ export function press(
 
 export function drag(e: Editor, g: Gesture, offset: int32): void {
 	const unit = unitOf(e.doc, offset, g.clicks);
-	const origin = g.origin;
-	const forward = unit.end() >= origin.end();
-	replacePrimary(e, forward ? span(origin.start(), unit.end()) : span(origin.end(), unit.start()));
+	const forward = unit.end() >= g.origin.end();
+	const anchor = forward ? g.origin.start() : g.origin.end();
+	replacePrimary(e, span(anchor, forward ? unit.end() : unit.start()));
 }
 
 function editorAt(text: string, offsets: int32[]): Editor {
@@ -407,7 +407,9 @@ function editorAt(text: string, offsets: int32[]): Editor {
 
 function heads(e: Editor): string {
 	const parts: string[] = [];
-	for (const s of e.selections.ranges) { parts.push(s.anchor == s.head ? `${s.head}` : `${s.anchor}-${s.head}`); }
+	for (const s of e.selections.ranges) {
+		parts.push(s.isEmpty() ? `${s.head}` : `${s.anchor}-${s.head}`);
+	}
 	return parts.join(",");
 }
 
