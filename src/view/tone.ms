@@ -1,0 +1,18 @@
+export enum Tone {
+	Plain,
+	Keyword,
+	Function,
+	Type,
+	String,
+	Number,
+	Constant,
+	Comment,
+	Operator,
+	Punctuation,
+	Variable,
+	Parameter,
+	Property,
+	Builtin,
+	Tag,
+	Attribute,
+}

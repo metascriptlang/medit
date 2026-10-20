@@ -1,10 +1,16 @@
 import { Document } from "../model/document";
 import { cellsBetween, offsetAtCell, prevCluster } from "../model/motion";
 import { clusterCellsIn, nextClusterIn } from "../text/clusters";
+import { Tone } from "./tone";
 
 const TAB: int32 = 9;
 const SPACE: int32 = 32;
 const DELETE: int32 = 0x7F;
+
+export struct Piece {
+	text: string;
+	tone: Tone;
+}
 
 export struct VisualRow {
 	line: int32;
@@ -77,8 +83,10 @@ function pushSpaces(out: uint8[], count: int32): void {
 	for (let k = 0; k < count; k++) { out.push(SPACE as uint8); }
 }
 
-export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): string {
-	const out: uint8[] = [];
+export function rowPieces(doc: Document, r: VisualRow, left: int32, cols: int32, tones: Tone[], base: int32): Piece[] {
+	const pieces: Piece[] = [];
+	let out: uint8[] = [];
+	let tone = Tone.Plain;
 	const text = doc.slice(r.from, r.to);
 	const b = text.asBytes();
 	const end = b.length as int32;
@@ -90,6 +98,13 @@ export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): 
 		const w = clusterCellsIn(b, at, cell);
 		const next = nextClusterIn(b, at);
 		if (cell + w > first) {
+			const k = r.from + at - base;
+			const t = k >= 0 && k < (tones.length as int32) ? tones[k] : Tone.Plain;
+			if (t != tone && out.length > 0) {
+				pieces.push({ text: out.asString(), tone });
+				out = [];
+			}
+			tone = t;
 			const lead = b[at] as int32;
 			if (lead == TAB || cell < first || cell + w > limit) {
 				pushSpaces(out, Math.min(cell + w, limit) - Math.max(cell, first));
@@ -105,7 +120,14 @@ export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): 
 		cell += w;
 		at = next;
 	}
-	return out.asString();
+	if (out.length > 0 || pieces.length == 0) { pieces.push({ text: out.asString(), tone }); }
+	return pieces;
+}
+
+export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): string {
+	const parts: string[] = [];
+	for (const p of rowPieces(doc, r, left, cols, [], 0)) { parts.push(p.text); }
+	return parts.join("");
 }
 
 function texts(doc: Document, rows: VisualRow[]): string {
@@ -153,6 +175,17 @@ test "an offset at a soft break belongs to the row it starts" {
 	assert offsetIn(d, rows[0], 20) == 7;
 	assert offsetIn(d, rows[1], 20) == 13;
 	assert cellIn(d, rows[1], 10) == 2;
+}
+
+test "a row splits into pieces where the tone changes" {
+	const d = new Document("ab cd");
+	const rows = rowsOf(d, 0, 0);
+	const tones: Tone[] = [Tone.Keyword, Tone.Keyword, Tone.Plain, Tone.String, Tone.String];
+	const pieces = rowPieces(d, rows[0], 1, 10, tones.slice(1, 5), 1);
+	assert pieces.length == 3;
+	assert pieces[0].text == "b" && pieces[0].tone == Tone.Keyword;
+	assert pieces[1].text == " " && pieces[1].tone == Tone.Plain;
+	assert pieces[2].text == "cd" && pieces[2].tone == Tone.String;
 }
 
 test "row text expands tabs, pads wide clusters and shows control characters" {
