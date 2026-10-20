@@ -3,23 +3,31 @@ import { readFile } from "std/fs";
 import { Document } from "../src/model/document";
 import { Syntax } from "../src/syntax/syntax";
 
-const r = readFile(argv[argv.length - 1]);
-if (!r.ok) { throw new Error("read failed"); }
-const doc = new Document(r.value);
-const s = new Syntax();
-let t0 = Date.now();
-s.sync(doc);
-console.log(`parse: ${Date.now() - t0} ms for ${doc.length()} bytes, ${doc.lineCount()} lines`);
+const RUNS: int32 = 20;
+const LINES: int32 = 40;
+
+function microsecondsEach(start: float64): int32 {
+	return ((performance.now() - start) * 1000.0 / (RUNS as float64)) as int32;
+}
+
+const source = readFile(argv[argv.length - 1]);
+if (!source.ok) { throw new Error(`syntaxBench: ${source.error.message}`); }
+const doc = new Document(source.value);
+const syntax = new Syntax();
+let start = performance.now();
+syntax.sync(doc);
+const parsed = (performance.now() - start) as int32;
+console.log(`parse: ${parsed} ms for ${doc.length()} bytes, ${doc.lineCount()} lines`);
 for (const line of [10, doc.lineCount() / 2, doc.lineCount() - 10]) {
 	const at = doc.lineStart(line);
-	t0 = Date.now();
-	for (let i = 0; i < 20; i++) {
+	start = performance.now();
+	for (let i = 0; i < RUNS; i++) {
 		const _e = doc.splice({ from: at, to: at, text: " " });
-		s.sync(doc);
+		syntax.sync(doc);
 	}
-	console.log(`keystroke and reparse at line ${line}: ${(Date.now() - t0) * 50} us`);
-	t0 = Date.now();
-	let n = 0;
-	for (let f = 0; f < 20; f++) { n += s.tonesIn(doc, at, doc.lineEnd(Math.min(line + 40, doc.lineCount() - 1))).length; }
-	console.log(`tones of 40 lines: ${(Date.now() - t0) * 50} us`);
+	console.log(`keystroke and reparse at line ${line}: ${microsecondsEach(start)} us`);
+	const end = doc.lineEnd(Math.min(line + LINES, doc.lineCount() - 1));
+	start = performance.now();
+	for (let i = 0; i < RUNS; i++) { const _tones = syntax.tonesIn(doc, at, end); }
+	console.log(`tones of ${LINES} lines: ${microsecondsEach(start)} us`);
 }
