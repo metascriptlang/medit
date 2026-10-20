@@ -38,11 +38,10 @@ function classEnd(p: Readonly<Span<uint8>>, i: int32): int32 {
 	if (c != OPEN) { return i + 1; }
 	let k = i + 1;
 	if (at(p, k) == CARET) { k += 1; }
-	k += 1;
-	while (at(p, k) != CLOSE) {
+	do {
 		if (k >= (p.length as int32)) { throw new Error("lua pattern has an unclosed ["); }
 		k += at(p, k) == PERCENT ? 2 : 1;
-	}
+	} while (at(p, k) != CLOSE);
 	return k + 1;
 }
 
@@ -136,6 +135,14 @@ test "anchors, classes and sets" {
 	assert luaMatches("xx12", "%d+$");
 	assert luaMatches("a.b", "a%.b");
 	assert !luaMatches("axb", "a%.b");
+}
+
+test "a set may open with a bracket, escaped or not" {
+	assert luaMatches("]", "^[%]]$");
+	assert !luaMatches("]]", "^[%]]$");
+	assert luaMatches("]", "^[]]$");
+	assert luaMatches("a", "^[^]]$");
+	assert !luaMatches("]", "^[^]]$");
 }
 
 test "greedy, lazy and optional repeats" {
