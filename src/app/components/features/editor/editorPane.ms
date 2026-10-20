@@ -4,9 +4,10 @@ import { Accessor, createSignal } from "../../../../../../neon/src/core/signal";
 import { List, createList } from "../../../../../../neon/src/core/list";
 import { ForList, Show } from "../../../../../../neon/src/macros/ui/flow";
 import { PixelRatio } from "../../../../../../neon/src/api/pixelRatio";
-import { View, ViewHandle } from "../../../../../../neon/src/components/primitives";
+import { TextInputHandle, View, ViewHandle } from "../../../../../../neon/src/components/primitives";
 import { Editor } from "../../../../model/editor";
-import { Sel, primaryRange, span } from "../../../../model/selection";
+import { Sel, primaryRange, single, span } from "../../../../model/selection";
+import { LineTarget, lineTarget, targetLine, targetOffset } from "../../../../model/goto";
 import { Query, matchesIn } from "../../../../model/find";
 import { BracketPair, enclosingBrackets } from "../../../../model/brackets";
 import {
@@ -19,16 +20,17 @@ import {
 	press,
 } from "../../../../model/commands";
 import { Outcome, defaultKeymap } from "../../../../input/keymap";
-import { Viewport, dragScrollRows } from "../../../../view/viewport";
+import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax } from "../../../../syntax/syntax";
 import { CARET, FONT_SIZE, MUTED, PANEL } from "../../../theme";
-import { caretPlace, statusLine } from "../../../../view/status";
+import { caretPlace, goToHelp, statusLine } from "../../../../view/status";
 import { Box, Overlay } from "../../ui/overlay";
 import { LineRow, Row } from "../../content/lineRow";
 import { Preedit } from "../../content/preedit";
 import { FindBar } from "../find/findBar";
 import { createFinder } from "../find/finder";
+import { GoToBar } from "../goto/goToBar";
 import { createBlink } from "./blink";
 import { Grid, framed, gutterWidth, painted } from "./paint";
 
@@ -80,6 +82,10 @@ export function EditorPane(props: {
 	const [status, setStatus] = createSignal<Row>({ spans: [] });
 	let saved = false;
 	let refusal: string | null = null;
+	const [goingTo, setGoingTo] = createSignal<boolean>(false);
+	const [lineQuery, setLineQuery] = createSignal<string>("");
+	let goingFrom: Viewport | null = null;
+	let goText = "";
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
 	const rowsIn = (line: int32): int32 => rowsOf(doc, line, wrapWidth()).length as int32;
@@ -107,10 +113,15 @@ export function EditorPane(props: {
 		return [span(p.open, p.open + 1), span(p.close, p.close + 1)];
 	};
 
+	const goTarget = (): LineTarget | null =>
+		lineTarget(goText, doc.lineOf(editor.selections.primaryRange().head) + 1);
+
 	const report = (): void => {
 		const dirty = editor.isDirty();
 		const note = refusal !== null ? ` · ${refusal as string}` : saved && !dirty ? " · saved" : "";
-		const left = ` ${props.path}${dirty ? " ●" : ""}${note}`;
+		const left = goingFrom !== null
+			? ` ${goToHelp(doc, editor.selections, goTarget())}`
+			: ` ${props.path}${dirty ? " ●" : ""}${note}`;
 		const text = statusLine(left, `${caretPlace(doc, editor.selections)} `, columns);
 		setStatus({ spans: [{ text, style: { color: refusal !== null ? CARET : MUTED } }] });
 	};
@@ -165,6 +176,11 @@ export function EditorPane(props: {
 		},
 		findBar: finder.open,
 		findAgain: finder.again,
+		goToLine: (): void => {
+			goingFrom = view;
+			setGoingTo(true);
+			paint();
+		},
 	};
 
 	const layout = (e: NeonEvent): void => {
@@ -259,6 +275,39 @@ export function EditorPane(props: {
 		reveal();
 	};
 
+	const goClosed = (): void => {
+		goingFrom = null;
+		goText = "";
+		setLineQuery("");
+		setGoingTo(false);
+		focus();
+	};
+
+	const goChanged = (text: string): void => {
+		goText = text;
+		setLineQuery(text);
+		const t = goTarget();
+		if (t !== null) { view = view.centered(doc.targetLine(t as LineTarget), doc.lineCount(), rowsIn); }
+		paint();
+	};
+
+	const goConfirmed = (): void => {
+		const t = goTarget();
+		goClosed();
+		if (t !== null) {
+			const at = doc.targetOffset(t as LineTarget);
+			editor.select(single(at));
+			view = view.centered(doc.lineOf(at), doc.lineCount(), rowsIn);
+		}
+		reveal();
+	};
+
+	const goCancelled = (): void => {
+		if (goingFrom !== null) { view = goingFrom as Viewport; }
+		goClosed();
+		paint();
+	};
+
 	const widest = (): int32 => {
 		let most = 0;
 		for (const r of frame) { most = Math.max(most, cellIn(doc, r, r.to)); }
@@ -318,6 +367,14 @@ export function EditorPane(props: {
 			</Show>
 		</View>
 		<FindBar finder={finder} moved={reveal} closed={focus} />
+		<GoToBar
+			shown={goingTo()}
+			query={lineQuery()}
+			attach={(input: TextInputHandle): void => { input.focus(); }}
+			changed={goChanged}
+			confirmed={goConfirmed}
+			cancelled={goCancelled}
+		/>
 		<View style={{ height: drawn().rowHeight, backgroundColor: PANEL }}>
 			<LineRow row={status()} cellWidth={drawn().cellWidth} rowHeight={drawn().rowHeight} />
 		</View>
