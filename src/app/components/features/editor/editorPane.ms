@@ -19,7 +19,7 @@ import {
 	press,
 } from "../../../../model/commands";
 import { Outcome, defaultKeymap } from "../../../../input/keymap";
-import { Viewport } from "../../../../view/viewport";
+import { Viewport, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax } from "../../../../syntax/syntax";
 import { CARET, FONT_SIZE, MUTED, PANEL } from "../../../theme";
@@ -64,6 +64,7 @@ export function EditorPane(props: {
 	let area: ViewHandle | null = null;
 	let view: Viewport = { line: 0, sub: 0, left: 0, rows: 0, cols: 0, pending: 0 };
 	let columns = 0;
+	let areaHeight = 0.0;
 	let wrap = false;
 	let frame: VisualRow[] = [];
 	let gesture: Gesture | null = null;
@@ -189,6 +190,7 @@ export function EditorPane(props: {
 		grid = { cellWidth: cellPx / ratio, rowHeight: rowPx / ratio };
 		setDrawn(grid);
 		columns = Math.floor(PixelRatio.getPixelSizeForLayoutSize(e.width) / cellPx) as int32;
+		areaHeight = e.height;
 		const heightPx = PixelRatio.getPixelSizeForLayoutSize(e.height);
 		view = { ...view, rows: Math.max(1, Math.floor(heightPx / rowPx) as int32) };
 		fit();
@@ -231,10 +233,14 @@ export function EditorPane(props: {
 
 	const offsetAt = (e: NeonEvent): int32 => {
 		const i = Math.floor(Math.max(0, e.locationY) / grid.rowHeight) as int32;
-		if (frame.length == 0 || i >= (frame.length as int32)) { return doc.length(); }
+		if (frame.length == 0) { return doc.length(); }
+		const bottom = frame[frame.length - 1];
+		if (i >= (frame.length as int32) && bottom.last && bottom.line == doc.lineCount() - 1) {
+			return doc.length();
+		}
 		const textX = gutterWidth(doc.lineCount()) * grid.cellWidth;
 		const cell = Math.round((Math.max(0, e.locationX) - textX) / grid.cellWidth) as int32;
-		return offsetIn(doc, frame[i], view.left + Math.max(0, cell));
+		return offsetIn(doc, frame[Math.min(i, (frame.length as int32) - 1)], view.left + Math.max(0, cell));
 	};
 
 	const pressed = (e: NeonEvent): void => {
@@ -250,6 +256,11 @@ export function EditorPane(props: {
 
 	const dragged = (e: NeonEvent): void => {
 		if (gesture === null || !e.pressed) { return; }
+		const rows = dragScrollRows(e.locationY, areaHeight, grid.rowHeight);
+		if (rows != 0) {
+			view = view.nudged(rows, doc.lineCount(), rowsIn);
+			frame = framed(doc, view, wrapWidth());
+		}
 		drag(editor, gesture as Gesture, offsetAt(e));
 		reveal();
 	};
