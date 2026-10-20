@@ -15,25 +15,17 @@ export function mapThrough(offset: int32, changes: Change[], bias: Bias): int32 
 
 export class Editor {
 	doc: Document;
-	selections: Selections;
-	private undos: Step[];
-	private redos: Step[];
-	private depth: int32;
-	private pending: Edit[];
-	private pendingBefore: Selections;
-	private group: string;
-	private lastGroup: string;
+	selections: Selections = single(0);
+	private undos: Step[] = [];
+	private redos: Step[] = [];
+	private depth: int32 = 0;
+	private pending: Edit[] = [];
+	private pendingBefore: Selections = single(0);
+	private group: string = "";
+	private lastGroup: string = "";
 
 	constructor(doc: Document) {
 		this.doc = doc;
-		this.selections = single(0);
-		this.undos = [];
-		this.redos = [];
-		this.depth = 0;
-		this.pending = [];
-		this.pendingBefore = this.selections;
-		this.group = "";
-		this.lastGroup = "";
 	}
 
 	select(next: Selections): void {
