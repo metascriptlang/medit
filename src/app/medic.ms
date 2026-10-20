@@ -1,14 +1,12 @@
 import { NeonNode } from "../../../neon/src/render/node";
 import { runWindow, DesktopOptions, desktopOptions } from "../../../neon/src/platform/ion/window";
 import { Clipboard } from "../../../neon/src/api/clipboard";
-import { getWindow, setTitle } from "../../../ion/src/index";
 import { argv, exit } from "std/process";
 import { readFile, rename, writeFile } from "std/fs";
 import { Clip } from "../model/commands";
 import { App } from "./app";
 
 const FONT_PATH = "assets/JetBrainsMonoNL-Regular.ttf";
-const WINDOW_LABEL = "main";
 
 function fail(message: string): void {
 	console.log(`medic: ${message}`);
@@ -39,17 +37,6 @@ function storeTo(path: string): (text: string) => string | null {
 	};
 }
 
-function titleFor(path: string): (dirty: boolean) => void {
-	return (dirty: boolean): void => {
-		const win = getWindow(WINDOW_LABEL);
-		if (win === null) {
-			console.log(`medic: no window labelled "${WINDOW_LABEL}" to retitle`);
-			return;
-		}
-		setTitle(win, `${dirty ? "● " : ""}medic ${path}`);
-	};
-}
-
 function main(): int32 {
 	if (argv.length < 2) {
 		console.log("usage: medic <file>");
@@ -62,8 +49,10 @@ function main(): int32 {
 		return 1;
 	}
 	const contents = text.value;
+	// Parked: the title shows no unsaved marker until neon lets an app set its window title,
+	// ~/metascript/.inbox/neon/2026-10-16-haro-window-title-from-an-app.md
 	const opts: DesktopOptions = { ...desktopOptions(`medic ${path}`, 960, 640), font: FONT_PATH };
-	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, storeTo(path), titleFor(path), fail)) as int32;
+	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, storeTo(path), fail)) as int32;
 }
 
 exit(main());

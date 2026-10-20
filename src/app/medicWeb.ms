@@ -23,4 +23,4 @@ function store(text: string): string | null {
 }
 
 const opts: CanvasOptions = { ...canvasOptions(960, 640), font: FONT_PATH };
-exit(runCanvas(opts, (): NeonNode => App(SAMPLE, "sample.ms", appClip, store, (dirty: boolean): void => {}, fail)));
+exit(runCanvas(opts, (): NeonNode => App(SAMPLE, "sample.ms", appClip, store, fail)));

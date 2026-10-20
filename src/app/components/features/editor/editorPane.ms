@@ -52,7 +52,6 @@ export function EditorPane(props: {
 	syntax: Syntax | null;
 	clip: Clip;
 	save: (text: string) => string | null;
-	dirtied: (dirty: boolean) => void;
 	fail: (message: string) => void;
 }): NeonNode {
 	const { editor, syntax, clip, fail } = props;
@@ -79,7 +78,6 @@ export function EditorPane(props: {
 	const shades: List<Box> = createList<Box>([]);
 	const carets: List<Box> = createList<Box>([]);
 	const [status, setStatus] = createSignal<Row>({ spans: [] });
-	let titledDirty = false;
 	let saved = false;
 	let refusal: string | null = null;
 
@@ -111,10 +109,6 @@ export function EditorPane(props: {
 
 	const report = (): void => {
 		const dirty = editor.isDirty();
-		if (dirty != titledDirty) {
-			titledDirty = dirty;
-			props.dirtied(dirty);
-		}
 		const note = refusal !== null ? ` · ${refusal as string}` : saved && !dirty ? " · saved" : "";
 		const left = ` ${props.path}${dirty ? " ●" : ""}${note}`;
 		const text = statusLine(left, `${caretPlace(doc, editor.selections)} `, columns);

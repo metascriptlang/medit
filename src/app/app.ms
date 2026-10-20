@@ -15,7 +15,6 @@ export function App(
 	path: string,
 	clip: Clip,
 	store: (text: string) => string | null,
-	dirtied: (dirty: boolean) => void,
 	fail: (message: string) => void,
 ): NeonNode {
 	const editor = new Editor(new Document(text));
@@ -28,7 +27,6 @@ export function App(
 			syntax={syntax}
 			clip={clip}
 			save={store}
-			dirtied={dirtied}
 			fail={fail}
 		/>
 	</Void>;
