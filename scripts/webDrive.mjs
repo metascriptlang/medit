@@ -58,6 +58,7 @@ const VK = {
 	ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Backspace: 8, Tab: 9, Escape: 27,
 	Home: 36, End: 35, Delete: 46, PageUp: 33, PageDown: 34, Insert: 45,
 };
+const PUNCTUATION = { "/": ["Slash", 191], ".": ["Period", 190], ",": ["Comma", 188], "[": ["BracketLeft", 219], "]": ["BracketRight", 221] };
 const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
 
 function keyOf(chord) {
@@ -65,8 +66,9 @@ function keyOf(chord) {
 	const key = parts.pop();
 	const modifiers = parts.reduce((m, p) => m | MOD_BITS[p], 0);
 	const letter = key.length === 1 && /[a-z]/i.test(key);
-	const code = letter ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : key;
-	const windowsVirtualKeyCode = letter ? key.toUpperCase().charCodeAt(0) : VK[key] ?? 0;
+	const [punctuationCode, punctuationVk] = PUNCTUATION[key] ?? [key, 0];
+	const code = letter ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : punctuationCode;
+	const windowsVirtualKeyCode = letter ? key.toUpperCase().charCodeAt(0) : VK[key] ?? punctuationVk;
 	return { key, code, modifiers, windowsVirtualKeyCode };
 }
 
