@@ -1,7 +1,7 @@
 // Drives the web build in headless Chrome over the DevTools protocol and saves screenshots.
 //   node scripts/webDrive.mjs <url> <outDir> <step>...
 // Steps: wait:<ms>  shot:<name>  wheel:<deltaY>  hwheel:<deltaX>  key:[ctrl+][alt+][shift+]<key>[*n]  type:<text> (keypresses)  text:<text> (insertText)
-//        compose:<text>  commit:<text>  click:<x>,<y>[,<count>][,alt|shift]  drag:<x1>,<y1>,<x2>,<y2>
+//        compose:<text>  commit:<text>  click:<x>,<y>[,<count>][,alt|shift]  drag:<x1>,<y1>,<x2>,<y2>[,<moves>]
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -116,10 +116,12 @@ for (const step of steps) {
 		}
 		await sleep(100);
 	} else if (kind === "drag") {
-		const [x1, y1, x2, y2] = arg.split(",").map(Number);
+		const [x1, y1, x2, y2, moves = 2] = arg.split(",").map(Number);
 		await mouse("mousePressed", x1, y1, 0, 1);
-		await mouse("mouseMoved", (x1 + x2) / 2, (y1 + y2) / 2, 0, 0);
-		await mouse("mouseMoved", x2, y2, 0, 0);
+		for (let k = 1; k <= moves; k++) {
+			await mouse("mouseMoved", x1 + (x2 - x1) * k / moves, y1 + (y2 - y1) * k / moves, 0, 0);
+			await sleep(10);
+		}
 		await mouse("mouseReleased", x2, y2, 0, 1);
 		await sleep(100);
 	} else if (kind === "type") {
