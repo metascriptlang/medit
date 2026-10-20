@@ -28,8 +28,8 @@ export function rowsOf(doc: Document, line: int32, width: int32): Vec<VisualRow>
 		return rows;
 	}
 	const text = doc.line(line);
-	const b = text.asBytes();
-	const end = b.length as int32;
+	const bytes = text.asBytes();
+	const end = bytes.length as int32;
 	let from = 0;
 	let rowCell = 0;
 	let at = 0;
@@ -37,8 +37,8 @@ export function rowsOf(doc: Document, line: int32, width: int32): Vec<VisualRow>
 	let breakAt = -1;
 	let breakCell = 0;
 	while (at < end) {
-		const w = clusterCellsIn(b, at, cell);
-		if (cell + w - rowCell > width && at > from) {
+		const cells = clusterCellsIn(bytes, at, cell);
+		if (cell + cells - rowCell > width && at > from) {
 			const soft = breakAt > from;
 			const cut = soft ? breakAt : at;
 			rows.push({ line, from: start + from, to: start + cut, cell: rowCell, last: false });
@@ -47,9 +47,9 @@ export function rowsOf(doc: Document, line: int32, width: int32): Vec<VisualRow>
 			breakAt = -1;
 			continue;
 		}
-		const lead = b[at] as int32;
-		cell += w;
-		at = nextClusterIn(b, at);
+		const lead = bytes[at] as int32;
+		cell += cells;
+		at = nextClusterIn(bytes, at);
 		if (lead == SPACE || lead == TAB) {
 			breakAt = at;
 			breakCell = cell;
@@ -79,8 +79,18 @@ export function offsetIn(doc: Document, r: VisualRow, cell: int32): int32 {
 	return !r.last && at == r.to ? prevCluster(doc, r.to) : at;
 }
 
-function pushSpaces(out: uint8[], count: int32): void {
+function pushSpaces(this out: uint8[], count: int32): void {
 	for (let k = 0; k < count; k++) { out.push(SPACE as uint8); }
+}
+
+function pushControlPicture(this out: uint8[], lead: int32): void {
+	out.push(0xE2 as uint8);
+	out.push(0x90 as uint8);
+	out.push((lead == DELETE ? 0xA1 : 0x80 + lead) as uint8);
+}
+
+function toneAt(tones: Readonly<Span<Tone>>, index: int32): Tone {
+	return index >= 0 && index < (tones.length as int32) ? tones[index] : Tone.Plain;
 }
 
 export function rowPieces(
@@ -95,36 +105,33 @@ export function rowPieces(
 	let out: uint8[] = [];
 	let tone = Tone.Plain;
 	const text = doc.slice(r.from, r.to);
-	const b = text.asBytes();
-	const end = b.length as int32;
+	const bytes = text.asBytes();
+	const end = bytes.length as int32;
 	const first = r.cell + left;
 	const limit = first + cols;
 	let at = 0;
 	let cell = r.cell;
 	while (at < end && cell < limit) {
-		const w = clusterCellsIn(b, at, cell);
-		const next = nextClusterIn(b, at);
-		if (cell + w > first) {
-			const k = r.from + at - base;
-			const t = k >= 0 && k < (tones.length as int32) ? tones[k] : Tone.Plain;
-			if (t != tone && out.length > 0) {
+		const cells = clusterCellsIn(bytes, at, cell);
+		const next = nextClusterIn(bytes, at);
+		if (cell + cells > first) {
+			const here = toneAt(tones, r.from + at - base);
+			if (here != tone && out.length > 0) {
 				pieces.push({ text: out.asString(), tone });
 				out = [];
 			}
-			tone = t;
-			const lead = b[at] as int32;
-			if (lead == TAB || cell < first || cell + w > limit) {
-				pushSpaces(out, Math.min(cell + w, limit) - Math.max(cell, first));
+			tone = here;
+			const lead = bytes[at] as int32;
+			if (lead == TAB || cell < first || cell + cells > limit) {
+				out.pushSpaces(Math.min(cell + cells, limit) - Math.max(cell, first));
 			} else if (lead < SPACE || lead == DELETE) {
-				out.push(0xE2 as uint8);
-				out.push(0x90 as uint8);
-				out.push((lead == DELETE ? 0xA1 : 0x80 + lead) as uint8);
+				out.pushControlPicture(lead);
 			} else {
-				for (let k = at; k < next; k++) { out.push(b[k]); }
-				pushSpaces(out, w - 1);
+				for (let k = at; k < next; k++) { out.push(bytes[k]); }
+				out.pushSpaces(cells - 1);
 			}
 		}
-		cell += w;
+		cell += cells;
 		at = next;
 	}
 	if (out.length > 0 || pieces.length == 0) { pieces.push({ text: out.asString(), tone }); }
@@ -132,9 +139,9 @@ export function rowPieces(
 }
 
 export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): string {
-	const parts: string[] = [];
-	for (const p of rowPieces(doc, r, left, cols, [], 0)) { parts.push(p.text); }
-	return parts.join("");
+	let text = "";
+	for (const p of rowPieces(doc, r, left, cols, [], 0)) { text += p.text; }
+	return text;
 }
 
 function texts(doc: Document, rows: Readonly<Span<VisualRow>>): string {
