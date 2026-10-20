@@ -23,42 +23,44 @@ const EXTEND: int32[] = [
 	0x1F3FB, 0x1F3FF, 0xE0020, 0xE007F,
 ];
 
-function inRanges(ranges: Readonly<Span<int32>>, cp: int32): boolean {
+function inRanges(ranges: Readonly<Span<int32>>, codePoint: int32): boolean {
 	for (let k = 0; k < ranges.length; k += 2) {
-		if (cp < ranges[k]) { return false; }
-		if (cp <= ranges[k + 1]) { return true; }
+		if (codePoint < ranges[k]) { return false; }
+		if (codePoint <= ranges[k + 1]) { return true; }
 	}
 	return false;
 }
 
-function isTrail(b: int32): boolean { return (b & 0xC0) == 0x80; }
+function isTrail(byte: int32): boolean { return (byte & 0xC0) == 0x80; }
 
-function stepIn(b: Readonly<Span<uint8>>, at: int32): int32 {
-	const lead = b[at] as int32;
-	const n = lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
-	return Math.min(n, (b.length as int32) - at);
+function stepIn(bytes: Readonly<Span<uint8>>, at: int32): int32 {
+	const lead = bytes[at] as int32;
+	const length = lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+	return Math.min(length, (bytes.length as int32) - at);
 }
 
-function codePointIn(b: Readonly<Span<uint8>>, at: int32): int32 {
-	const lead = b[at] as int32;
-	const n = stepIn(b, at);
-	if (n == 1) { return lead; }
-	let cp = lead & match (n) { 2 => 0x1F, 3 => 0x0F, _ => 0x07 };
-	for (let k = 1; k < n; k++) { cp = (cp << 6) | ((b[at + k] as int32) & 0x3F); }
-	return cp;
+function codePointIn(bytes: Readonly<Span<uint8>>, at: int32): int32 {
+	const lead = bytes[at] as int32;
+	const length = stepIn(bytes, at);
+	if (length == 1) { return lead; }
+	let codePoint = lead & match (length) { 2 => 0x1F, 3 => 0x0F, _ => 0x07 };
+	for (let k = 1; k < length; k++) {
+		codePoint = (codePoint << 6) | ((bytes[at + k] as int32) & 0x3F);
+	}
+	return codePoint;
 }
 
-export function nextClusterIn(b: Readonly<Span<uint8>>, from: int32): int32 {
-	const total = b.length as int32;
+export function nextClusterIn(bytes: Readonly<Span<uint8>>, from: int32): int32 {
+	const total = bytes.length as int32;
 	if (from >= total) { return total; }
-	let at = from + stepIn(b, from);
+	let at = from + stepIn(bytes, from);
 	while (at < total) {
-		const cp = codePointIn(b, at);
-		if (cp == ZWJ) {
-			at += stepIn(b, at);
-			if (at < total) { at += stepIn(b, at); }
-		} else if (inRanges(EXTEND, cp)) {
-			at += stepIn(b, at);
+		const codePoint = codePointIn(bytes, at);
+		if (codePoint == ZWJ) {
+			at += stepIn(bytes, at);
+			if (at < total) { at += stepIn(bytes, at); }
+		} else if (inRanges(EXTEND, codePoint)) {
+			at += stepIn(bytes, at);
 		} else {
 			break;
 		}
@@ -66,54 +68,63 @@ export function nextClusterIn(b: Readonly<Span<uint8>>, from: int32): int32 {
 	return at;
 }
 
-function startsClusterIn(b: Readonly<Span<uint8>>, at: int32): boolean {
-	if (isTrail(b[at] as int32)) { return false; }
-	const cp = codePointIn(b, at);
-	if (cp == ZWJ || inRanges(EXTEND, cp)) { return false; }
+function startsClusterIn(bytes: Readonly<Span<uint8>>, at: int32): boolean {
+	if (isTrail(bytes[at] as int32)) { return false; }
+	const codePoint = codePointIn(bytes, at);
+	if (codePoint == ZWJ || inRanges(EXTEND, codePoint)) { return false; }
 	if (at == 0) { return true; }
 	let prev = at - 1;
-	while (prev > 0 && isTrail(b[prev] as int32)) { prev -= 1; }
-	return codePointIn(b, prev) != ZWJ;
+	while (prev > 0 && isTrail(bytes[prev] as int32)) { prev -= 1; }
+	return codePointIn(bytes, prev) != ZWJ;
 }
 
-export function prevClusterIn(b: Readonly<Span<uint8>>, to: int32): int32 {
+export function prevClusterIn(bytes: Readonly<Span<uint8>>, to: int32): int32 {
 	if (to <= 0) { return 0; }
 	let from = to - 1;
-	while (from > 0 && !startsClusterIn(b, from)) { from -= 1; }
+	while (from > 0 && !startsClusterIn(bytes, from)) { from -= 1; }
 	let last = from;
 	let at = from;
 	while (at < to) {
 		last = at;
-		at = nextClusterIn(b, at);
+		at = nextClusterIn(bytes, at);
 	}
 	return last;
 }
 
-export function clusterCellsIn(b: Readonly<Span<uint8>>, at: int32, cell: int32): int32 {
-	const lead = b[at] as int32;
+export function clusterCellsIn(bytes: Readonly<Span<uint8>>, at: int32, cell: int32): int32 {
+	const lead = bytes[at] as int32;
 	if (lead == TAB) { return TAB_SIZE - cell % TAB_SIZE; }
 	if (lead < 0x80) { return 1; }
-	return inRanges(WIDE, codePointIn(b, at)) ? 2 : 1;
+	return inRanges(WIDE, codePointIn(bytes, at)) ? 2 : 1;
 }
 
-export function cellsIn(b: Readonly<Span<uint8>>, from: int32, to: int32, cell: int32): int32 {
+export function cellsIn(bytes: Readonly<Span<uint8>>, from: int32, to: int32, cell: int32): int32 {
 	let at = from;
-	let c = cell;
+	let column = cell;
 	while (at < to) {
-		c += clusterCellsIn(b, at, c);
-		at = nextClusterIn(b, at);
+		column += clusterCellsIn(bytes, at, column);
+		at = nextClusterIn(bytes, at);
 	}
-	return c - cell;
+	return column - cell;
 }
 
-export function offsetAtCellIn(b: Readonly<Span<uint8>>, from: int32, to: int32, cell: int32, target: int32): int32 {
+export function offsetAtCellIn(
+	bytes: Readonly<Span<uint8>>,
+	from: int32,
+	to: int32,
+	cell: int32,
+	target: int32,
+): int32 {
+	const goal = cell + target;
 	let at = from;
-	let c = cell;
+	let column = cell;
 	while (at < to) {
-		const w = clusterCellsIn(b, at, c);
-		if (c + w > cell + target) { return (cell + target - c) * 2 <= w ? at : nextClusterIn(b, at); }
-		c += w;
-		at = nextClusterIn(b, at);
+		const width = clusterCellsIn(bytes, at, column);
+		if (column + width > goal) {
+			return (goal - column) * 2 <= width ? at : nextClusterIn(bytes, at);
+		}
+		column += width;
+		at = nextClusterIn(bytes, at);
 	}
 	return at;
 }
