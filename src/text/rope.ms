@@ -174,7 +174,8 @@ function collect(node: Node, from: int32, to: int32, out: string[]): void {
 	for (let k = 0; k < node.sizes.length; k++) {
 		const end = start + node.sizes[k];
 		if (end > from && start < to) {
-			collect(node.children[k], Math.max(from, start) - start, Math.min(to, end) - start, out);
+			const child = node.children[k];
+			collect(child, Math.max(from, start) - start, Math.min(to, end) - start, out);
 		}
 		if (end >= to) { return; }
 		start = end;
@@ -293,6 +294,10 @@ function nextSeed(seed: uint32): uint32 {
 	return x;
 }
 
+function below(seed: uint32, limit: int32): int32 {
+	return (seed % (limit as uint32)) as int32;
+}
+
 function sampleText(seed: uint32, bytes: int32): string {
 	const alphabet = ["a", "b", " ", "\n", "é", "😀", "xyz", "\n\n", "tiếng"];
 	const parts: string[] = [];
@@ -300,7 +305,7 @@ function sampleText(seed: uint32, bytes: int32): string {
 	let s = seed;
 	while (size < bytes) {
 		s = nextSeed(s);
-		const piece = alphabet[(s % (alphabet.length as uint32)) as int32];
+		const piece = alphabet[below(s, alphabet.length as int32)];
 		parts.push(piece);
 		size += piece.byteLength;
 	}
@@ -405,13 +410,13 @@ test "random edits agree with a plain string and keep the tree balanced" {
 	let root = rootOf(leavesOf(model, false));
 	for (let step = 0; step < 400; step++) {
 		seed = nextSeed(seed);
-		const total = model.byteLength as uint32;
-		const from = boundaryAt(model, (seed % (total + 1)) as int32);
+		const total = model.byteLength;
+		const from = boundaryAt(model, below(seed, total + 1));
 		seed = nextSeed(seed);
-		const span = step % 7 == 0 ? (seed % (10 * LEAF_MAX as uint32)) as int32 : (seed % 40) as int32;
-		const to = boundaryAt(model, Math.min(from + span, total as int32));
+		const span = below(seed, step % 7 == 0 ? 10 * LEAF_MAX : 40);
+		const to = boundaryAt(model, Math.min(from + span, total));
 		seed = nextSeed(seed);
-		const size = step % 11 == 0 ? (seed % (6 * LEAF_MAX as uint32)) as int32 : (seed % 8) as int32;
+		const size = below(seed, step % 11 == 0 ? 6 * LEAF_MAX : 8);
 		const insert = step % 3 == 0 ? "" : sampleText(seed, size);
 		root = rootOf(replaced(root, from, to, insert));
 		model = model.byteSlice(0, from) + insert + model.byteSlice(to, model.byteLength);
@@ -426,10 +431,10 @@ test "rope queries agree with a plain string after edits" {
 	let model = sampleText(13, 60000);
 	const r = new Rope(model);
 	const edits = [[100, 5000, 7], [30000, 30000, 2000], [0, 10, 3], [40000, 52000, 0]];
-	for (const e of edits) {
-		const from = boundaryAt(model, e[0] as int32);
-		const to = boundaryAt(model, Math.min(e[1] as int32, model.byteLength));
-		const insert = sampleText(from as uint32 + 1, e[2] as int32);
+	for (const edit of edits) {
+		const from = boundaryAt(model, edit[0]);
+		const to = boundaryAt(model, Math.min(edit[1], model.byteLength));
+		const insert = sampleText(from as uint32 + 1, edit[2]);
 		r.replace(from, to, insert);
 		model = model.byteSlice(0, from) + insert + model.byteSlice(to, model.byteLength);
 	}

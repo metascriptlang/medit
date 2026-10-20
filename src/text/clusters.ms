@@ -2,7 +2,8 @@ export const TAB_SIZE: int32 = 4;
 const TAB: int32 = 9;
 const ZWJ: int32 = 0x200D;
 
-// UAX #11 East Asian Width W and F, with emoji blocks taken whole: a few text-presentation symbols count two.
+// UAX #11 East Asian Width W and F, with emoji blocks taken whole: a few text-presentation
+// symbols count two.
 const WIDE: int32[] = [
 	0x1100, 0x115F, 0x231A, 0x231B, 0x2329, 0x232A, 0x23E9, 0x23EC, 0x23F0, 0x23F0, 0x23F3, 0x23F3,
 	0x25FD, 0x25FE, 0x2614, 0x2615, 0x2648, 0x2653, 0x267F, 0x267F, 0x2693, 0x2693, 0x26A1, 0x26A1,
@@ -17,7 +18,8 @@ const WIDE: int32[] = [
 	0x20000, 0x2FFFD, 0x30000, 0x3FFFD,
 ];
 
-// Not full UAX #29: Hangul jamo, Indic conjuncts and regional-indicator flags split; widen this when one of them is typed.
+// Not full UAX #29: Hangul jamo, Indic conjuncts and regional-indicator flags split; widen this
+// when one of them is typed.
 const EXTEND: int32[] = [
 	0x0300, 0x036F, 0x1AB0, 0x1AFF, 0x1DC0, 0x1DFF, ZWJ, ZWJ, 0x20D0, 0x20FF, 0xFE00, 0xFE0F,
 	0xFE20, 0xFE2F, 0x1F3FB, 0x1F3FF, 0xE0020, 0xE007F,
