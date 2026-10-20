@@ -1,6 +1,8 @@
 import { Document } from "./document";
 
+export const TAB_SIZE: int32 = 4;
 const NEWLINE: int32 = 10;
+const TAB: int32 = 9;
 const ZWJ: int32 = 0x200D;
 const CLUSTER_LOOKBACK: int32 = 64;
 
@@ -83,6 +85,59 @@ function startsCluster(doc: Document, at: int32): boolean {
 	return codePointAt(doc, prev) != ZWJ;
 }
 
+// UAX #11 East Asian Width W and F, with emoji blocks taken whole: a few text-presentation symbols count two.
+const WIDE: int32[] = [
+	0x1100, 0x115F, 0x231A, 0x231B, 0x2329, 0x232A, 0x23E9, 0x23EC, 0x23F0, 0x23F0, 0x23F3, 0x23F3,
+	0x25FD, 0x25FE, 0x2614, 0x2615, 0x2648, 0x2653, 0x267F, 0x267F, 0x2693, 0x2693, 0x26A1, 0x26A1,
+	0x26AA, 0x26AB, 0x26BD, 0x26BE, 0x26C4, 0x26C5, 0x26CE, 0x26CE, 0x26D4, 0x26D4, 0x26EA, 0x26EA,
+	0x26F2, 0x26F3, 0x26F5, 0x26F5, 0x26FA, 0x26FA, 0x26FD, 0x26FD, 0x2705, 0x2705, 0x270A, 0x270B,
+	0x2728, 0x2728, 0x274C, 0x274C, 0x274E, 0x274E, 0x2753, 0x2755, 0x2757, 0x2757, 0x2795, 0x2797,
+	0x27B0, 0x27B0, 0x27BF, 0x27BF, 0x2B1B, 0x2B1C, 0x2B50, 0x2B50, 0x2B55, 0x2B55, 0x2E80, 0x303E,
+	0x3040, 0xA4CF, 0xA960, 0xA97F, 0xAC00, 0xD7A3, 0xF900, 0xFAFF, 0xFE10, 0xFE19, 0xFE30, 0xFE6F,
+	0xFF00, 0xFF60, 0xFFE0, 0xFFE6, 0x16FE0, 0x16FE4, 0x17000, 0x18AFF, 0x1B000, 0x1B2FF,
+	0x1F004, 0x1F004, 0x1F0CF, 0x1F0CF, 0x1F18E, 0x1F18E, 0x1F191, 0x1F19A, 0x1F200, 0x1F2FF,
+	0x1F300, 0x1F64F, 0x1F680, 0x1F6FF, 0x1F7E0, 0x1F7EB, 0x1F900, 0x1F9FF, 0x1FA70, 0x1FAFF,
+	0x20000, 0x2FFFD, 0x30000, 0x3FFFD,
+];
+
+function isWide(cp: int32): boolean {
+	if (cp < 0x1100) { return false; }
+	for (let k = 0; k < WIDE.length; k += 2) {
+		if (cp < WIDE[k]) { return false; }
+		if (cp <= WIDE[k + 1]) { return true; }
+	}
+	return false;
+}
+
+export function clusterCells(doc: Document, at: int32, cell: int32): int32 {
+	const lead = doc.byteAt(at);
+	if (lead == TAB) { return TAB_SIZE - cell % TAB_SIZE; }
+	if (lead < 0x80) { return 1; }
+	return isWide(codePointAt(doc, at)) ? 2 : 1;
+}
+
+export function cellsBetween(doc: Document, from: int32, to: int32, cell: int32): int32 {
+	let at = from;
+	let c = cell;
+	while (at < to) {
+		c += clusterCells(doc, at, c);
+		at = nextCluster(doc, at);
+	}
+	return c - cell;
+}
+
+export function offsetAtCell(doc: Document, from: int32, to: int32, cell: int32, target: int32): int32 {
+	let at = from;
+	let c = cell;
+	while (at < to) {
+		const w = clusterCells(doc, at, c);
+		if (c + w > cell + target) { return (cell + target - c) * 2 <= w ? at : nextCluster(doc, at); }
+		c += w;
+		at = nextCluster(doc, at);
+	}
+	return at;
+}
+
 function classOf(code: int32): CharClass {
 	if (code == NEWLINE) { return CharClass.Newline; }
 	if (code == 32 || code == 9 || code == 13) { return CharClass.Space; }
@@ -124,20 +179,11 @@ export function wordAt(doc: Document, offset: int32): int32[] {
 }
 
 export function columnOf(doc: Document, offset: int32): int32 {
-	let at = doc.lineStart(doc.lineOf(offset));
-	let column = 0;
-	while (at < offset) {
-		at = nextCluster(doc, at);
-		column += 1;
-	}
-	return column;
+	return cellsBetween(doc, doc.lineStart(doc.lineOf(offset)), offset, 0);
 }
 
 export function offsetAtColumn(doc: Document, line: int32, column: int32): int32 {
-	const end = doc.lineEnd(line);
-	let at = doc.lineStart(line);
-	for (let c = 0; c < column && at < end; c++) { at = nextCluster(doc, at); }
-	return at;
+	return offsetAtCell(doc, doc.lineStart(line), doc.lineEnd(line), 0, column);
 }
 
 export function indentEnd(doc: Document, line: int32): int32 {
@@ -207,11 +253,23 @@ test "the word at an offset" {
 	assert end[1] == 11;
 }
 
-test "columns count clusters and clamp at the line end" {
+test "columns count display cells, a wide cluster two, and clamp at the line end" {
 	const d = new Document("a😀b\nxy");
-	assert columnOf(d, 5) == 2;
-	assert offsetAtColumn(d, 0, 2) == 5;
+	assert columnOf(d, 5) == 3;
+	assert offsetAtColumn(d, 0, 3) == 5;
+	assert offsetAtColumn(d, 0, 2) == 1;
 	assert offsetAtColumn(d, 1, 9) == 9;
+	assert columnOf(new Document("中文"), 6) == 4;
+}
+
+test "a tab reaches the next tab stop of its line" {
+	const d = new Document("ab\tx\n\t\tz");
+	assert columnOf(d, 3) == 4;
+	assert columnOf(d, 4) == 5;
+	assert offsetAtColumn(d, 0, 4) == 3;
+	assert offsetAtColumn(d, 0, 3) == 2;
+	assert columnOf(d, 7) == 8;
+	assert cellsBetween(d, 6, 7, 1) == 3;
 }
 
 test "home goes to the indent, then to the line start" {
