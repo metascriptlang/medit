@@ -36,6 +36,9 @@ export interface Context {
 
 export type Command = (e: Editor, cx: Context) => void;
 
+type Motion = (e: Editor, cx: Context, extend: boolean) => void;
+type Target = (doc: Document, at: int32) => int32;
+
 function reselect(e: Editor, each: (s: Sel) => Sel): void {
 	const next: Sel[] = [];
 	for (const s of e.selections.ranges) { next.push(each(s)); }
@@ -49,12 +52,34 @@ function moved(e: Editor, extend: boolean, target: (doc: Document, s: Sel) => in
 	});
 }
 
-function stepped(e: Editor, extend: boolean, toStart: boolean, by: (doc: Document, at: int32) => int32): void {
-	moved(e, extend, (doc: Document, s: Sel): int32 => {
-		if (!extend && !s.isEmpty()) { return toStart ? s.start() : s.end(); }
-		return by(doc, s.head);
-	});
+function jump(to: Target): Motion {
+	return (e: Editor, cx: Context, extend: boolean): void => {
+		moved(e, extend, (doc: Document, s: Sel): int32 => to(doc, s.head));
+	};
 }
+
+function step(by: Target, toStart: boolean): Motion {
+	return (e: Editor, cx: Context, extend: boolean): void => {
+		moved(e, extend, (doc: Document, s: Sel): int32 => {
+			if (!extend && !s.isEmpty()) { return toStart ? s.start() : s.end(); }
+			return by(doc, s.head);
+		});
+	};
+}
+
+function byRows(rows: int32): Motion {
+	return (e: Editor, cx: Context, extend: boolean): void => { vertical(e, cx, extend, rows); };
+}
+
+function byPages(pages: int32): Motion {
+	return (e: Editor, cx: Context, extend: boolean): void => {
+		vertical(e, cx, extend, pages * cx.pageRows());
+	};
+}
+
+function lineEndAt(doc: Document, at: int32): int32 { return doc.lineEnd(doc.lineOf(at)); }
+function docStart(doc: Document, at: int32): int32 { return 0; }
+function docEnd(doc: Document, at: int32): int32 { return doc.length(); }
 
 function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 	const doc = e.doc;
@@ -280,78 +305,63 @@ function selectLine(e: Editor): void {
 	});
 }
 
-function lineEndOf(doc: Document, s: Sel): int32 { return doc.lineEnd(doc.lineOf(s.head)); }
-function homeOf(doc: Document, s: Sel): int32 { return smartHome(doc, s.head); }
-function docStart(doc: Document, s: Sel): int32 { return 0; }
-function docEnd(doc: Document, s: Sel): int32 { return doc.length(); }
-function wordLeftOf(doc: Document, s: Sel): int32 { return wordLeft(doc, s.head); }
-function wordRightOf(doc: Document, s: Sel): int32 { return wordRight(doc, s.head); }
-
 export function commands(): Map<string, Command> {
-	const m = new Map<string, Command>();
-	m.set("left", (e: Editor, cx: Context): void => { stepped(e, false, true, prevCluster); });
-	m.set("right", (e: Editor, cx: Context): void => { stepped(e, false, false, nextCluster); });
-	m.set("selectLeft", (e: Editor, cx: Context): void => { stepped(e, true, true, prevCluster); });
-	m.set("selectRight", (e: Editor, cx: Context): void => { stepped(e, true, false, nextCluster); });
-	m.set("up", (e: Editor, cx: Context): void => { vertical(e, cx, false, -1); });
-	m.set("down", (e: Editor, cx: Context): void => { vertical(e, cx, false, 1); });
-	m.set("selectUp", (e: Editor, cx: Context): void => { vertical(e, cx, true, -1); });
-	m.set("selectDown", (e: Editor, cx: Context): void => { vertical(e, cx, true, 1); });
-	m.set("pageUp", (e: Editor, cx: Context): void => { vertical(e, cx, false, -cx.pageRows()); });
-	m.set("pageDown", (e: Editor, cx: Context): void => { vertical(e, cx, false, cx.pageRows()); });
-	m.set("selectPageUp", (e: Editor, cx: Context): void => { vertical(e, cx, true, -cx.pageRows()); });
-	m.set("selectPageDown", (e: Editor, cx: Context): void => { vertical(e, cx, true, cx.pageRows()); });
-	m.set("wordLeft", (e: Editor, cx: Context): void => { moved(e, false, wordLeftOf); });
-	m.set("wordRight", (e: Editor, cx: Context): void => { moved(e, false, wordRightOf); });
-	m.set("selectWordLeft", (e: Editor, cx: Context): void => { moved(e, true, wordLeftOf); });
-	m.set("selectWordRight", (e: Editor, cx: Context): void => { moved(e, true, wordRightOf); });
-	m.set("home", (e: Editor, cx: Context): void => { moved(e, false, homeOf); });
-	m.set("end", (e: Editor, cx: Context): void => { moved(e, false, lineEndOf); });
-	m.set("selectHome", (e: Editor, cx: Context): void => { moved(e, true, homeOf); });
-	m.set("selectEnd", (e: Editor, cx: Context): void => { moved(e, true, lineEndOf); });
-	m.set("docStart", (e: Editor, cx: Context): void => { moved(e, false, docStart); });
-	m.set("docEnd", (e: Editor, cx: Context): void => { moved(e, false, docEnd); });
-	m.set("selectDocStart", (e: Editor, cx: Context): void => { moved(e, true, docStart); });
-	m.set("selectDocEnd", (e: Editor, cx: Context): void => { moved(e, true, docEnd); });
-	m.set("selectAll", (e: Editor, cx: Context): void => {
+	const table = new Map<string, Command>();
+	const addMotion = (name: string, selectName: string, motion: Motion): void => {
+		table.set(name, (e: Editor, cx: Context): void => { motion(e, cx, false); });
+		table.set(selectName, (e: Editor, cx: Context): void => { motion(e, cx, true); });
+	};
+	addMotion("left", "selectLeft", step(prevCluster, true));
+	addMotion("right", "selectRight", step(nextCluster, false));
+	addMotion("up", "selectUp", byRows(-1));
+	addMotion("down", "selectDown", byRows(1));
+	addMotion("pageUp", "selectPageUp", byPages(-1));
+	addMotion("pageDown", "selectPageDown", byPages(1));
+	addMotion("wordLeft", "selectWordLeft", jump(wordLeft));
+	addMotion("wordRight", "selectWordRight", jump(wordRight));
+	addMotion("home", "selectHome", jump(smartHome));
+	addMotion("end", "selectEnd", jump(lineEndAt));
+	addMotion("docStart", "selectDocStart", jump(docStart));
+	addMotion("docEnd", "selectDocEnd", jump(docEnd));
+	table.set("selectAll", (e: Editor, cx: Context): void => {
 		e.select({ ranges: [span(0, e.doc.length())], primary: 0 });
 	});
-	m.set("selectLine", (e: Editor, cx: Context): void => { selectLine(e); });
-	m.set("selectNextOccurrence", (e: Editor, cx: Context): void => { selectNextOccurrence(e); });
-	m.set("addCursorAbove", (e: Editor, cx: Context): void => { addCursor(e, -1); });
-	m.set("addCursorBelow", (e: Editor, cx: Context): void => { addCursor(e, 1); });
-	m.set("collapse", (e: Editor, cx: Context): void => {
+	table.set("selectLine", (e: Editor, cx: Context): void => { selectLine(e); });
+	table.set("selectNextOccurrence", (e: Editor, cx: Context): void => { selectNextOccurrence(e); });
+	table.set("addCursorAbove", (e: Editor, cx: Context): void => { addCursor(e, -1); });
+	table.set("addCursorBelow", (e: Editor, cx: Context): void => { addCursor(e, 1); });
+	table.set("collapse", (e: Editor, cx: Context): void => {
 		e.select(single(e.selections.ranges[e.selections.primary].head));
 	});
-	m.set("newline", (e: Editor, cx: Context): void => { newline(e); });
-	m.set("tab", (e: Editor, cx: Context): void => { tab(e); });
-	m.set("outdent", (e: Editor, cx: Context): void => { outdent(e); });
-	m.set("backspace", (e: Editor, cx: Context): void => {
+	table.set("newline", (e: Editor, cx: Context): void => { newline(e); });
+	table.set("tab", (e: Editor, cx: Context): void => { tab(e); });
+	table.set("outdent", (e: Editor, cx: Context): void => { outdent(e); });
+	table.set("backspace", (e: Editor, cx: Context): void => {
 		deleteEach(e, "delete", (doc: Document, s: Sel): int32[] => [prevCluster(doc, s.head), s.head]);
 	});
-	m.set("delete", (e: Editor, cx: Context): void => {
+	table.set("delete", (e: Editor, cx: Context): void => {
 		deleteEach(e, "delete", (doc: Document, s: Sel): int32[] => [s.head, nextCluster(doc, s.head)]);
 	});
-	m.set("deleteWordLeft", (e: Editor, cx: Context): void => {
+	table.set("deleteWordLeft", (e: Editor, cx: Context): void => {
 		deleteEach(e, "", (doc: Document, s: Sel): int32[] => [wordLeft(doc, s.head), s.head]);
 	});
-	m.set("deleteWordRight", (e: Editor, cx: Context): void => {
+	table.set("deleteWordRight", (e: Editor, cx: Context): void => {
 		deleteEach(e, "", (doc: Document, s: Sel): int32[] => [s.head, wordRight(doc, s.head)]);
 	});
-	m.set("undo", (e: Editor, cx: Context): void => { const _u = e.undo(); });
-	m.set("redo", (e: Editor, cx: Context): void => { const _r = e.redo(); });
-	m.set("copy", copy);
-	m.set("cut", cut);
-	m.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
-	m.set("save", (e: Editor, cx: Context): void => { cx.save(e.doc.fileText()); });
-	m.set("find", (e: Editor, cx: Context): void => { cx.findBar(false); });
-	m.set("replace", (e: Editor, cx: Context): void => { cx.findBar(true); });
-	m.set("findNext", (e: Editor, cx: Context): void => { cx.findAgain(false); });
-	m.set("findPrev", (e: Editor, cx: Context): void => { cx.findAgain(true); });
-	m.set("paste", (e: Editor, cx: Context): void => {
+	table.set("undo", (e: Editor, cx: Context): void => { const _u = e.undo(); });
+	table.set("redo", (e: Editor, cx: Context): void => { const _r = e.redo(); });
+	table.set("copy", copy);
+	table.set("cut", cut);
+	table.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
+	table.set("save", (e: Editor, cx: Context): void => { cx.save(e.doc.fileText()); });
+	table.set("find", (e: Editor, cx: Context): void => { cx.findBar(false); });
+	table.set("replace", (e: Editor, cx: Context): void => { cx.findBar(true); });
+	table.set("findNext", (e: Editor, cx: Context): void => { cx.findAgain(false); });
+	table.set("findPrev", (e: Editor, cx: Context): void => { cx.findAgain(true); });
+	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
-	return m;
+	return table;
 }
 
 export struct Gesture {
