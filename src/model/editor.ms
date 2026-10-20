@@ -17,6 +17,7 @@ export class Editor {
 	doc: Document;
 	selections: Selections = single(0);
 	caseSensitive: boolean = false;
+	lineComment: string | null = null;
 	wordwiseNext: Selections | null = null;
 	private undos: Vec<Step> = [];
 	private redos: Vec<Step> = [];

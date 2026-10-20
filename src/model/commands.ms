@@ -330,6 +330,214 @@ function selectLine(e: Editor, cx: Context): void {
 	});
 }
 
+struct LineGroup {
+	first: int32;
+	last: int32;
+	members: int32;
+}
+
+function lineGroups(e: Editor, touching: boolean): LineGroup[] {
+	const groups: LineGroup[] = [];
+	for (const s of e.selections.ranges) {
+		const [first, last] = linesOf(e.doc, s);
+		const k = groups.length - 1;
+		if (k >= 0 && first <= groups[k].last + (touching ? 1 : 0)) {
+			groups[k] = {
+				first: groups[k].first,
+				last: Math.max(last, groups[k].last),
+				members: groups[k].members + 1,
+			};
+		} else {
+			groups.push({ first, last, members: 1 });
+		}
+	}
+	return groups;
+}
+
+function shiftEach(e: Editor, groups: LineGroup[], shifts: int32[]): Sel[] {
+	const next: Sel[] = [];
+	let i = 0;
+	for (let g = 0; g < groups.length; g++) {
+		for (let m = 0; m < groups[g].members; m++) {
+			const s = e.selections.ranges[i];
+			next.push({ anchor: s.anchor + shifts[g], head: s.head + shifts[g], goal: s.goal });
+			i += 1;
+		}
+	}
+	return next;
+}
+
+function commit(e: Editor, edits: Edit[], next: Sel[]): void {
+	if (edits.length == 0) { return; }
+	e.begin();
+	const _applied = e.change(edits);
+	e.select({ ranges: next, primary: e.selections.primary });
+	e.end();
+}
+
+function moveLines(e: Editor, down: boolean): void {
+	const doc = e.doc;
+	const groups = lineGroups(e, true);
+	const edits: Edit[] = [];
+	const shifts: int32[] = [];
+	for (const g of groups) {
+		const block = doc.slice(doc.lineStart(g.first), doc.lineEnd(g.last));
+		if (down && g.last + 1 < doc.lineCount()) {
+			const below = doc.line(g.last + 1);
+			edits.push({
+				from: doc.lineStart(g.first),
+				to: doc.lineEnd(g.last + 1),
+				text: below + "\n" + block,
+			});
+			shifts.push(below.byteLength + 1);
+		} else if (!down && g.first > 0) {
+			const above = doc.line(g.first - 1);
+			edits.push({
+				from: doc.lineStart(g.first - 1),
+				to: doc.lineEnd(g.last),
+				text: block + "\n" + above,
+			});
+			shifts.push(-(above.byteLength + 1));
+		} else {
+			shifts.push(0);
+		}
+	}
+	commit(e, edits, shiftEach(e, groups, shifts));
+}
+
+function duplicateLines(e: Editor, up: boolean): void {
+	const doc = e.doc;
+	const groups = lineGroups(e, false);
+	const edits: Edit[] = [];
+	const shifts: int32[] = [];
+	let delta = 0;
+	for (const g of groups) {
+		const block = doc.slice(doc.lineStart(g.first), doc.lineEnd(g.last));
+		const grown = block.byteLength + 1;
+		if (up) {
+			const at = doc.lineEnd(g.last);
+			edits.push({ from: at, to: at, text: "\n" + block });
+			shifts.push(delta);
+		} else {
+			const at = doc.lineStart(g.first);
+			edits.push({ from: at, to: at, text: block + "\n" });
+			shifts.push(delta + grown);
+		}
+		delta += grown;
+	}
+	commit(e, edits, shiftEach(e, groups, shifts));
+}
+
+function deleteLines(e: Editor, cx: Context): void {
+	const doc = e.doc;
+	const groups = lineGroups(e, true);
+	const edits: Edit[] = [];
+	const columns: int32[] = [];
+	let primary = 0;
+	let i = 0;
+	for (const g of groups) {
+		columns.push(columnOf(doc, e.selections.ranges[i].head));
+		if (e.selections.primary >= i) { primary = columns.length - 1; }
+		i += g.members;
+		if (g.last + 1 < doc.lineCount()) {
+			edits.push({ from: doc.lineStart(g.first), to: doc.lineStart(g.last + 1), text: "" });
+		} else {
+			edits.push({ from: Math.max(0, doc.lineStart(g.first) - 1), to: doc.length(), text: "" });
+		}
+	}
+	e.begin();
+	const applied = e.change(edits);
+	const next: Sel[] = [];
+	for (let k = 0; k < applied.length; k++) {
+		next.push(cursorAt(offsetAtColumn(doc, doc.lineOf(applied[k].from), columns[k])));
+	}
+	e.select({ ranges: next, primary });
+	e.end();
+}
+
+function openLine(e: Editor, below: boolean): void {
+	const doc = e.doc;
+	const edits: Edit[] = [];
+	const indents: int32[] = [];
+	for (const s of e.selections.ranges) {
+		const line = doc.lineOf(s.head);
+		const indent = doc.slice(doc.lineStart(line), indentEnd(doc, line));
+		indents.push(indent.byteLength);
+		const at = below ? doc.lineEnd(line) : doc.lineStart(line);
+		edits.push({ from: at, to: at, text: below ? "\n" + indent : indent + "\n" });
+	}
+	e.begin();
+	const applied = e.change(edits);
+	const next: Sel[] = [];
+	for (let k = 0; k < applied.length; k++) {
+		const c = applied[k];
+		next.push(cursorAt(below ? c.from + c.inserted : c.from + indents[k]));
+	}
+	e.select({ ranges: next, primary: e.selections.primary });
+	e.end();
+}
+
+function commentRange(doc: Document, line: int32, marker: string): Sel {
+	const from = indentEnd(doc, line);
+	const bare = marker.trimEnd();
+	const end = doc.lineEnd(line);
+	if (from + bare.byteLength > end || doc.slice(from, from + bare.byteLength) != bare) {
+		return cursorAt(from);
+	}
+	let to = from + bare.byteLength;
+	for (let k = bare.byteLength; k < marker.byteLength && to < end; k++) {
+		if (doc.byteAt(to) != marker.byteAt(k)) { break; }
+		to += 1;
+	}
+	return span(from, to);
+}
+
+function toggleComments(e: Editor, cx: Context): void {
+	if (e.lineComment === null) { return; }
+	const marker = e.lineComment as string;
+	const doc = e.doc;
+	const edits: Edit[] = [];
+	let lastLine = -1;
+	for (const s of e.selections.ranges) {
+		const [lineFirst, last] = linesOf(doc, s);
+		const first = lineFirst == lastLine ? lineFirst + 1 : lineFirst;
+		lastLine = last;
+		if (first > last) { continue; }
+		const ranges: Sel[] = [];
+		let commented = 0;
+		let uncommented = 0;
+		for (let line = first; line <= last; line++) {
+			const r = commentRange(doc, line, marker);
+			const blank = first < last && indentEnd(doc, line) == doc.lineEnd(line);
+			if (!blank) {
+				if (r.isEmpty()) { uncommented += 1; } else { commented += 1; }
+			}
+			ranges.push(r);
+		}
+		if (uncommented == 0 && commented > 0) {
+			for (const r of ranges) { edits.push({ from: r.start(), to: r.end(), text: "" }); }
+			continue;
+		}
+		let column = ranges[0].start() - doc.lineStart(first);
+		for (let line = first; line <= last; line++) {
+			column = Math.min(column, ranges[line - first].start() - doc.lineStart(line));
+		}
+		for (let line = first; line <= last; line++) {
+			const at = doc.lineStart(line) + column;
+			edits.push({ from: at, to: at, text: marker });
+		}
+	}
+	if (edits.length == 0) { return; }
+	e.begin();
+	const applied = e.change(edits);
+	reselect(e, (s: Sel): Sel => {
+		const start = mapThrough(s.start(), applied, Bias.Right);
+		const end = s.isEmpty() ? start : Math.max(start, mapThrough(s.end(), applied, Bias.Left));
+		return s.anchor <= s.head ? span(start, end) : span(end, start);
+	});
+	e.end();
+}
+
 export function commands(): Map<string, Command> {
 	const table = new Map<string, Command>();
 	const addMotion = (name: string, selectName: string, motion: Motion): void => {
@@ -360,6 +568,14 @@ export function commands(): Map<string, Command> {
 		e.select(single(e.selections.primaryRange().head));
 	});
 	table.set("newline", newline);
+	table.set("newlineBelow", (e: Editor, cx: Context): void => { openLine(e, true); });
+	table.set("newlineAbove", (e: Editor, cx: Context): void => { openLine(e, false); });
+	table.set("moveLineUp", (e: Editor, cx: Context): void => { moveLines(e, false); });
+	table.set("moveLineDown", (e: Editor, cx: Context): void => { moveLines(e, true); });
+	table.set("duplicateLineUp", (e: Editor, cx: Context): void => { duplicateLines(e, true); });
+	table.set("duplicateLineDown", (e: Editor, cx: Context): void => { duplicateLines(e, false); });
+	table.set("deleteLine", deleteLines);
+	table.set("toggleComments", toggleComments);
 	table.set("tab", tab);
 	table.set("outdent", outdent);
 	table.set("backspace", deleteToward("delete", prevCluster));
@@ -621,6 +837,121 @@ test "all occurrences from a caret select every whole word" {
 	run(e, "selectAllOccurrences");
 	assert heads(e) == "0-2,7-9";
 	assert e.selections.primary == 1;
+}
+
+test "a line comment goes after the indent and comes back off" {
+	const run = runner();
+	const e = editorAt("fn {\n\tb();\n}", [7]);
+	e.lineComment = "// ";
+	run(e, "toggleComments");
+	assert e.doc.text() == "fn {\n\t// b();\n}";
+	assert heads(e) == "10";
+	run(e, "toggleComments");
+	assert e.doc.text() == "fn {\n\tb();\n}";
+	assert heads(e) == "7";
+}
+
+test "a commented block takes one column, blank lines included" {
+	const run = runner();
+	const e = editorAt("{\n\t\ta();\n\n\tc();\n}", [0]);
+	e.lineComment = "// ";
+	e.select({ ranges: [span(4, 15)], primary: 0 });
+	run(e, "toggleComments");
+	assert e.doc.text() == "{\n// \t\ta();\n// \n// \tc();\n}";
+	assert heads(e) == "7-24";
+	run(e, "toggleComments");
+	assert e.doc.text() == "{\n\t\ta();\n\n\tc();\n}";
+}
+
+test "uncommenting takes the marker and at most its one space" {
+	const run = runner();
+	const e = editorAt("//b();\n// c();\n//  d();\nx", [0]);
+	e.lineComment = "// ";
+	e.select({ ranges: [span(0, 24)], primary: 0 });
+	run(e, "toggleComments");
+	assert e.doc.text() == "b();\nc();\n d();\nx";
+}
+
+test "a selection ending at a line start leaves that line alone, and no marker means no change" {
+	const run = runner();
+	const e = editorAt("a\nb\n", [0]);
+	e.lineComment = "# ";
+	e.select({ ranges: [span(0, 2)], primary: 0 });
+	run(e, "toggleComments");
+	assert e.doc.text() == "# a\nb\n";
+	e.lineComment = null;
+	run(e, "toggleComments");
+	assert e.doc.text() == "# a\nb\n";
+}
+
+test "lines move up and down with their selections, and stop at the ends" {
+	const run = runner();
+	const e = editorAt("a\nbb\nc", [3]);
+	run(e, "moveLineUp");
+	assert e.doc.text() == "bb\na\nc";
+	assert heads(e) == "1";
+	run(e, "moveLineUp");
+	assert e.doc.text() == "bb\na\nc";
+	run(e, "moveLineDown");
+	run(e, "moveLineDown");
+	assert e.doc.text() == "a\nc\nbb";
+	assert heads(e) == "5";
+	run(e, "undo");
+	assert e.doc.text() == "a\nbb\nc";
+}
+
+test "a block of selected lines moves as one" {
+	const run = runner();
+	const e = editorAt("a\nb\nc\nd", [2, 4]);
+	run(e, "moveLineDown");
+	assert e.doc.text() == "a\nd\nb\nc";
+	assert heads(e) == "4,6";
+}
+
+test "duplicating down moves the cursor onto the copy, duplicating up keeps it" {
+	const run = runner();
+	const e = editorAt("ab\ncd", [1]);
+	run(e, "duplicateLineDown");
+	assert e.doc.text() == "ab\nab\ncd";
+	assert heads(e) == "4";
+	run(e, "duplicateLineUp");
+	assert e.doc.text() == "ab\nab\nab\ncd";
+	assert heads(e) == "4";
+}
+
+test "cursors on neighbouring lines duplicate their own lines" {
+	const run = runner();
+	const e = editorAt("a\nb", [0, 2]);
+	run(e, "duplicateLineDown");
+	assert e.doc.text() == "a\na\nb\nb";
+	assert heads(e) == "2,6";
+}
+
+test "deleting a line keeps the column on the line that takes its place" {
+	const run = runner();
+	const e = editorAt("ab\ncd\nef", [1]);
+	run(e, "deleteLine");
+	assert e.doc.text() == "cd\nef";
+	assert heads(e) == "1";
+	e.select(single(4));
+	run(e, "deleteLine");
+	assert e.doc.text() == "cd";
+	assert heads(e) == "1";
+	run(e, "deleteLine");
+	assert e.doc.text() == "";
+	assert heads(e) == "0";
+}
+
+test "a new line below or above keeps the indent" {
+	const run = runner();
+	const e = editorAt("\tab", [2]);
+	run(e, "newlineBelow");
+	assert e.doc.text() == "\tab\n\t";
+	assert heads(e) == "5";
+	e.select(single(1));
+	run(e, "newlineAbove");
+	assert e.doc.text() == "\t\n\tab\n\t";
+	assert heads(e) == "1";
 }
 
 test "a cursor added below lands at the same column" {
