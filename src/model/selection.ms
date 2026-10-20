@@ -10,7 +10,7 @@ export struct Selections {
 }
 
 export function cursorAt(offset: int32): Sel {
-	return { anchor: offset, head: offset, goal: null };
+	return span(offset, offset);
 }
 
 export function span(anchor: int32, head: int32): Sel {
