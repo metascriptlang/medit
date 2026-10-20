@@ -43,7 +43,7 @@ function codePointIn(b: Readonly<Span<uint8>>, at: int32): int32 {
 	const lead = b[at] as int32;
 	const n = stepIn(b, at);
 	if (n == 1) { return lead; }
-	let cp = lead & (n == 2 ? 0x1F : n == 3 ? 0x0F : 0x07);
+	let cp = lead & match (n) { 2 => 0x1F, 3 => 0x0F, _ => 0x07 };
 	for (let k = 1; k < n; k++) { cp = (cp << 6) | ((b[at + k] as int32) & 0x3F); }
 	return cp;
 }
