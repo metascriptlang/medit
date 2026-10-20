@@ -2,7 +2,7 @@ import { NeonNode } from "../../../neon/src/render/node";
 import { runWindow, DesktopOptions, desktopOptions } from "../../../neon/src/platform/ion/window";
 import { Clipboard } from "../../../neon/src/api/clipboard";
 import { argv, exit } from "std/process";
-import { readFile } from "std/fs";
+import { readFile, rename, writeFile } from "std/fs";
 import { Clip } from "../model/commands";
 import { App } from "./app";
 
@@ -26,6 +26,19 @@ const systemClip: Clip = {
 	},
 };
 
+function storeTo(path: string): (text: string) => void {
+	return (text: string): void => {
+		const temp = `${path}.medic-save`;
+		const wrote = writeFile(temp, text);
+		if (!wrote.ok) {
+			console.log(`medic: cannot save ${path}: ${wrote.error.toString()}`);
+			return;
+		}
+		const moved = rename(temp, path);
+		if (!moved.ok) { console.log(`medic: saved to ${temp}, but cannot replace ${path}: ${moved.error.toString()}`); }
+	};
+}
+
 function main(): int32 {
 	if (argv.length < 2) {
 		console.log("usage: medic <file>");
@@ -39,7 +52,7 @@ function main(): int32 {
 	}
 	const contents = text.value;
 	const opts: DesktopOptions = { ...desktopOptions(`medic ${path}`, 960, 640), font: FONT_PATH };
-	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, fail)) as int32;
+	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, storeTo(path), fail)) as int32;
 }
 
 exit(main());

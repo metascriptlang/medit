@@ -80,7 +80,13 @@ function fill<T>(list: List<T>, items: T[]): void {
 	}
 }
 
-export function App(text: string, path: string, clip: Clip, fail: (message: string) => void): NeonNode {
+export function App(
+	text: string,
+	path: string,
+	clip: Clip,
+	store: (text: string) => void,
+	fail: (message: string) => void,
+): NeonNode {
 	const editor = new Editor(new Document(text));
 	const doc = editor.doc;
 	const syntax = covers(path) && doc.length() <= HIGHLIGHT_LIMIT ? new Syntax() : null;
@@ -235,6 +241,7 @@ export function App(text: string, path: string, clip: Clip, fail: (message: stri
 				});
 			},
 		},
+		save: store,
 	};
 
 	const layout = (e: NeonEvent): void => {
