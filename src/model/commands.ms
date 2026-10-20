@@ -606,3 +606,129 @@ test "alt-click adds a cursor and shift-click extends the primary" {
 	const _b = press(e, 6, 1, true, false);
 	assert heads(e) == "1,4-6";
 }
+
+test "home, end, word and document motions, and their select forms keep the anchor" {
+	const run = runner();
+	const e = editorAt("\tfoo bar\nbaz", [5]);
+	run(e, "home");
+	assert heads(e) == "1";
+	run(e, "home");
+	assert heads(e) == "0";
+	run(e, "end");
+	assert heads(e) == "8";
+	run(e, "selectHome");
+	assert heads(e) == "8-1";
+	run(e, "wordRight");
+	assert heads(e) == "4";
+	run(e, "selectWordLeft");
+	assert heads(e) == "4-1";
+	run(e, "docEnd");
+	assert heads(e) == "12";
+	run(e, "selectDocStart");
+	assert heads(e) == "12-0";
+	run(e, "selectEnd");
+	assert heads(e) == "12-8";
+	run(e, "selectWordRight");
+	assert heads(e) == "12-9";
+	run(e, "docStart");
+	assert heads(e) == "0";
+}
+
+test "page motions move by the context's page rows and keep the goal column" {
+	const run = runner();
+	const e = editorAt("a\nb\nc\nd", [1]);
+	run(e, "pageDown");
+	assert heads(e) == "5";
+	run(e, "selectPageDown");
+	assert heads(e) == "5-7";
+	run(e, "pageUp");
+	assert heads(e) == "3";
+}
+
+test "select line takes whole lines, and select all then collapse ends at the document end" {
+	const run = runner();
+	const e = editorAt("one\ntwo\nthree", [5]);
+	run(e, "selectLine");
+	assert heads(e) == "4-8";
+	e.select({ ranges: [span(1, 5)], primary: 0 });
+	run(e, "selectLine");
+	assert heads(e) == "0-8";
+	run(e, "selectAll");
+	assert heads(e) == "0-13";
+	run(e, "collapse");
+	assert heads(e) == "13";
+}
+
+test "cut without a selection takes the whole line, with one it takes the selection" {
+	const run = runner();
+	const e = editorAt("one\ntwo\nthree", [5]);
+	run(e, "cut");
+	assert e.doc.text() == "one\nthree";
+	assert heads(e) == "4";
+	run(e, "docStart");
+	run(e, "paste");
+	assert e.doc.text() == "two\none\nthree";
+	e.select({ ranges: [span(4, 7)], primary: 0 });
+	run(e, "cut");
+	assert e.doc.text() == "two\n\nthree";
+	assert heads(e) == "4";
+	const last = editorAt("a\nb", [3]);
+	run(last, "cut");
+	assert last.doc.text() == "a\n";
+	run(last, "paste");
+	assert last.doc.text() == "a\nb\n";
+}
+
+test "delete and delete word right remove forward from each cursor, one undo step each" {
+	const run = runner();
+	const e = editorAt("ab cd\nef", [0, 6]);
+	run(e, "delete");
+	assert e.doc.text() == "b cd\nf";
+	assert heads(e) == "0,5";
+	run(e, "deleteWordRight");
+	assert e.doc.text() == " cd\n";
+	assert heads(e) == "0,4";
+	run(e, "undo");
+	assert e.doc.text() == "b cd\nf";
+	run(e, "undo");
+	assert e.doc.text() == "ab cd\nef";
+}
+
+test "outdent takes a tab or up to four spaces from each selected line" {
+	const run = runner();
+	const e = editorAt("      x\n\ty\nz", [0]);
+	e.select({ ranges: [span(0, 11)], primary: 0 });
+	run(e, "outdent");
+	assert e.doc.text() == "  x\ny\nz";
+	assert heads(e) == "0-6";
+	run(e, "outdent");
+	assert e.doc.text() == "x\ny\nz";
+	assert heads(e) == "0-4";
+}
+
+test "a triple-click selects the line with its break and a drag extends by lines" {
+	const e = editorAt("one\ntwo\nthree", [0]);
+	const g = press(e, 5, 3, false, false);
+	assert heads(e) == "4-8";
+	drag(e, g, 10);
+	assert heads(e) == "4-13";
+	drag(e, g, 1);
+	assert heads(e) == "8-0";
+}
+
+test "a cursor added above becomes primary and stops at the first line" {
+	const run = runner();
+	const e = editorAt("abc\nabc", [6]);
+	run(e, "addCursorAbove");
+	assert heads(e) == "2,6";
+	assert e.selections.primary == 0;
+	run(e, "addCursorAbove");
+	assert heads(e) == "2,6";
+}
+
+test "next occurrence on an empty line leaves the cursor alone" {
+	const run = runner();
+	const e = editorAt("a\n\nb", [2]);
+	run(e, "selectNextOccurrence");
+	assert heads(e) == "2";
+}
