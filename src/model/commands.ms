@@ -13,6 +13,7 @@ import {
 } from "./motion";
 import { Sel, Selections, cursorAt, primaryRange, sameSelections, single, span } from "./selection";
 import { Query, nextMatch, selectAllMatches } from "./find";
+import { pairAround, typeText } from "./pairs";
 import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
@@ -188,8 +189,11 @@ function deleteToward(group: string, by: Target): Command {
 }
 
 export function insertText(e: Editor, text: string): void {
+	if (!text.includes("\n")) {
+		typeText(e, text);
+		return;
+	}
 	e.begin();
-	if (!text.includes("\n")) { e.groupAs("type"); }
 	e.replaceSelections(text);
 	e.end();
 }
@@ -578,7 +582,12 @@ export function commands(): Map<string, Command> {
 	table.set("toggleComments", toggleComments);
 	table.set("tab", tab);
 	table.set("outdent", outdent);
-	table.set("backspace", deleteToward("delete", prevCluster));
+	table.set("backspace", (e: Editor, cx: Context): void => {
+		deleteEach(e, "delete", (doc: Document, at: int32): Sel => {
+			const pair = pairAround(e, at);
+			return pair !== null ? pair as Sel : span(at, prevCluster(doc, at));
+		});
+	});
 	table.set("delete", deleteToward("delete", nextCluster));
 	table.set("deleteWordLeft", deleteToward("", wordLeft));
 	table.set("deleteWordRight", deleteToward("", wordRight));
@@ -1107,4 +1116,16 @@ test "next occurrence on an empty line leaves the cursor alone" {
 	const e = editorAt("a\n\nb", [2]);
 	run(e, "selectNextOccurrence");
 	assert heads(e) == "2";
+}
+
+test "backspace between an inserted pair deletes both" {
+	const run = runner();
+	const e = editorAt("f", [1]);
+	insertText(e, "(");
+	assert e.doc.text() == "f()";
+	run(e, "backspace");
+	assert e.doc.text() == "f" && heads(e) == "1";
+	const kept = editorAt("()", [1]);
+	run(kept, "backspace");
+	assert kept.doc.text() == ")";
 }

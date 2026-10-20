@@ -1,10 +1,17 @@
-import { Bias, Change, Document, Edit, mapOffset } from "./document";
+import { Anchor, Bias, Change, Document, Edit, mapOffset } from "./document";
 import { Sel, Selections, cursorAt, normalized, sameSelections, single, span } from "./selection";
 
 export struct Step {
 	edits: Edit[];
 	before: Selections;
 	after: Selections;
+}
+
+struct Autoclosed {
+	from: Anchor;
+	to: Anchor;
+	open: string;
+	close: string;
 }
 
 export function mapThrough(offset: int32, changes: Span<Change>, bias: Bias): int32 {
@@ -18,6 +25,7 @@ export class Editor {
 	selections: Selections = single(0);
 	caseSensitive: boolean = false;
 	lineComment: string | null = null;
+	private autoclosed: Autoclosed[] = [];
 	wordwiseNext: Selections | null = null;
 	private undos: Vec<Step> = [];
 	private redos: Vec<Step> = [];
@@ -40,6 +48,51 @@ export class Editor {
 			}
 		}
 		this.selections = next.normalized();
+		this.keepAutoclosed();
+	}
+
+	rememberAutoclosed(inside: int32, open: string, close: string): void {
+		this.autoclosed.push({
+			from: this.doc.anchor(inside, Bias.Left),
+			to: this.doc.anchor(inside, Bias.Right),
+			open,
+			close,
+		});
+	}
+
+	isAutoclosedAt(at: int32, close: string): boolean {
+		for (const r of this.autoclosed) {
+			if (this.doc.resolve(r.to) == at && r.close == close) { return true; }
+		}
+		return false;
+	}
+
+	isAutoclosedFrom(at: int32, open: string): boolean {
+		for (const r of this.autoclosed) {
+			if (this.doc.resolve(r.from) == at && r.open == open) { return true; }
+		}
+		return false;
+	}
+
+	private keepAutoclosed(): void {
+		const kept: Autoclosed[] = [];
+		for (const r of this.autoclosed) {
+			const from = this.doc.resolve(r.from);
+			const to = this.doc.resolve(r.to);
+			const opener = from - r.open.byteLength;
+			const closer = to + r.close.byteLength;
+			const whole = opener >= 0 && closer <= this.doc.length() && from <= to
+				&& this.doc.slice(opener, from) == r.open && this.doc.slice(to, closer) == r.close;
+			const held = this.selections.ranges.some(
+				(s: Sel): boolean => s.start() >= from && s.end() <= to,
+			);
+			if (whole && held) { kept.push(r); }
+			else {
+				this.doc.release(r.from);
+				this.doc.release(r.to);
+			}
+		}
+		this.autoclosed = kept;
 	}
 
 	begin(): void {
@@ -117,6 +170,7 @@ export class Editor {
 		const next: Sel[] = [];
 		for (const c of applied) { next.push(cursorAt(c.from + c.inserted)); }
 		this.selections = { ranges: next, primary: this.selections.primary };
+		this.keepAutoclosed();
 		this.end();
 	}
 
@@ -141,6 +195,7 @@ export class Editor {
 		}
 		into.push({ edits: inverses, before: step.after, after: step.before });
 		this.selections = step.before;
+		this.keepAutoclosed();
 		this.lastGroup = "";
 		return true;
 	}
