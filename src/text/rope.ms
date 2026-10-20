@@ -8,7 +8,7 @@ const RETURN: int32 = 13;
 
 // Child sizes live in the parent: reading each child's own field made a random line() 27 us
 // against 4.3 us here (100 MB, 1 KB leaves, release, 2026-10-20).
-class Node {
+interface Node {
 	text: string;
 	children: Node[];
 	sizes: int32[];
@@ -16,16 +16,6 @@ class Node {
 	bytes: int32;
 	breaks: int32;
 	height: int32;
-
-	constructor(text: string, children: Node[], sizes: int32[], lines: int32[], bytes: int32, breaks: int32, height: int32) {
-		this.text = text;
-		this.children = children;
-		this.sizes = sizes;
-		this.lines = lines;
-		this.bytes = bytes;
-		this.breaks = breaks;
-		this.height = height;
-	}
 }
 
 function breaksIn(text: string): int32 {
@@ -37,8 +27,12 @@ function breaksIn(text: string): int32 {
 	return count;
 }
 
+function leaf(text: string, breaks: int32): Node {
+	return { text, children: [], sizes: [], lines: [], bytes: text.byteLength, breaks, height: 0 };
+}
+
 function leafOf(text: string): Node {
-	return new Node(text, [], [], [], text.byteLength, breaksIn(text), 0);
+	return leaf(text, breaksIn(text));
 }
 
 function branchOf(children: Node[]): Node {
@@ -47,13 +41,13 @@ function branchOf(children: Node[]): Node {
 	let bytes = 0;
 	let breaks = 0;
 	for (let i = 0; i < children.length; i++) {
-		const c = children[i];
-		sizes.push(c.bytes);
-		lines.push(c.breaks);
-		bytes += c.bytes;
-		breaks += c.breaks;
+		const child = children[i];
+		sizes.push(child.bytes);
+		lines.push(child.breaks);
+		bytes += child.bytes;
+		breaks += child.breaks;
 	}
-	return new Node("", children, sizes, lines, bytes, breaks, children[0].height + 1);
+	return { text: "", children, sizes, lines, bytes, breaks, height: children[0].height + 1 };
 }
 
 function isContinuation(text: string, at: int32): boolean {
@@ -64,11 +58,11 @@ function leafFrom(bytes: Readonly<Span<uint8>>, from: int32, to: int32, crlf: bo
 	const out: uint8[] = [];
 	let breaks = 0;
 	for (let i = from; i < to; i++) {
-		const b = bytes[i];
-		if (b == NEWLINE) { breaks += 1; }
-		if (!(crlf && b == RETURN && i + 1 < to && bytes[i + 1] == NEWLINE)) { out.push(b); }
+		const byte = bytes[i];
+		if (byte == NEWLINE) { breaks += 1; }
+		if (!(crlf && byte == RETURN && i + 1 < to && bytes[i + 1] == NEWLINE)) { out.push(byte); }
 	}
-	return new Node(out.asString(), [], [], [], out.length as int32, breaks, 0);
+	return leaf(out.asString(), breaks);
 }
 
 function pushLeaves(text: string, crlf: boolean, out: Node[]): void {
