@@ -31,12 +31,12 @@ export function scrolledBy(this v: Viewport, delta: int32, lineCount: int32, row
 
 export function wheeled(this v: Viewport, notches: float64, lineCount: int32, rowsIn: RowCount): Viewport {
 	const total = v.pending - notches * ROWS_PER_NOTCH;
-	const whole = total < 0 ? Math.ceil(total) : Math.floor(total);
-	return { ...v.scrolledBy(whole as int32, lineCount, rowsIn), pending: total - whole };
+	const whole = total as int32;
+	return { ...v.scrolledBy(whole, lineCount, rowsIn), pending: total - whole };
 }
 
 export function slid(this v: Viewport, notches: float64, widest: int32): Viewport {
-	const left = v.left + Math.round(notches * COLS_PER_NOTCH) as int32;
+	const left = v.left + (Math.round(notches * COLS_PER_NOTCH) as int32);
 	return { ...v, left: Math.max(0, Math.min(left, widest - v.cols + 1)) };
 }
 
@@ -46,11 +46,11 @@ export function resized(this v: Viewport, rows: int32, cols: int32, lineCount: i
 }
 
 export function revealed(this v: Viewport, line: int32, sub: int32, lineCount: int32, rowsIn: RowCount): Viewport {
-	if (line < v.line || (line == v.line && sub < v.sub)) { return { ...v, line, sub }; }
-	let seen = -v.sub;
-	for (let l = v.line; l < line && seen < v.rows; l++) { seen += rowsIn(l); }
-	if (seen + sub < v.rows) { return v; }
 	const target: Viewport = { ...v, line, sub };
+	if (line < v.line || (line == v.line && sub < v.sub)) { return target; }
+	let seen = -v.sub;
+	for (let above = v.line; above < line && seen < v.rows; above++) { seen += rowsIn(above); }
+	if (seen + sub < v.rows) { return v; }
 	return target.scrolledBy(1 - v.rows, lineCount, rowsIn);
 }
 
@@ -102,6 +102,9 @@ test "fractional notches accumulate until they reach a row" {
 	assert once.line == 0;
 	const twice = once.wheeled(-0.2, 100, one);
 	assert twice.line == 1;
+	const up = at(5, 10).wheeled(0.2, 100, one);
+	assert up.line == 5;
+	assert up.wheeled(0.2, 100, one).line == 4;
 }
 
 test "shrinking the document while resized pulls the top back" {
