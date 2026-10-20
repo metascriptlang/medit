@@ -45,6 +45,18 @@ function reselect(e: Editor, each: (s: Sel) => Sel): void {
 	e.select({ ranges: next, primary: e.selections.primary });
 }
 
+function replacePrimary(e: Editor, s: Sel): void {
+	const next = e.selections.ranges.slice(0, e.selections.ranges.length);
+	next[e.selections.primary] = s;
+	e.select({ ranges: next, primary: e.selections.primary });
+}
+
+function addPrimary(e: Editor, s: Sel): void {
+	const next = e.selections.ranges.slice(0, e.selections.ranges.length);
+	next.push(s);
+	e.select({ ranges: next, primary: (next.length as int32) - 1 });
+}
+
 function moved(e: Editor, extend: boolean, target: (doc: Document, s: Sel) => int32): void {
 	reselect(e, (s: Sel): Sel => {
 		const head = target(e.doc, s);
@@ -272,9 +284,7 @@ function addCursor(e: Editor, rows: int32): void {
 	if (line < 0 || line >= e.doc.lineCount()) { return; }
 	const goal = from.goal !== null ? from.goal as int32 : columnOf(e.doc, from.head);
 	const head = offsetAtColumn(e.doc, line, goal);
-	const next = ranges.slice(0, ranges.length);
-	next.push({ anchor: head, head, goal });
-	e.select({ ranges: next, primary: (next.length as int32) - 1 });
+	addPrimary(e, { anchor: head, head, goal });
 }
 
 function selectNextOccurrence(e: Editor): void {
@@ -282,18 +292,13 @@ function selectNextOccurrence(e: Editor): void {
 	const primary = ranges[e.selections.primary];
 	if (primary.isEmpty()) {
 		const w = wordAt(e.doc, primary.head);
-		if (w[0] == w[1]) { return; }
-		const next = ranges.slice(0, ranges.length);
-		next[e.selections.primary] = span(w[0], w[1]);
-		e.select({ ranges: next, primary: e.selections.primary });
+		if (w[0] != w[1]) { replacePrimary(e, span(w[0], w[1])); }
 		return;
 	}
 	const needle = e.doc.slice(primary.start(), primary.end());
 	const at = nextMatch(e.doc, needle, ranges[ranges.length - 1].end());
-	for (const s of ranges) { if (s.start() == at) { return; } }
-	const next = ranges.slice(0, ranges.length);
-	next.push(span(at, at + needle.byteLength));
-	e.select({ ranges: next, primary: (next.length as int32) - 1 });
+	if (ranges.some((s: Sel): boolean => s.start() == at)) { return; }
+	addPrimary(e, span(at, at + needle.byteLength));
 }
 
 function selectLine(e: Editor): void {
@@ -381,33 +386,29 @@ function unitOf(doc: Document, offset: int32, clicks: int32): Sel {
 	return cursorAt(offset);
 }
 
-export function press(e: Editor, offset: int32, clicks: int32, extend: boolean, add: boolean): Gesture {
-	const ranges = e.selections.ranges;
-	const primary = ranges[e.selections.primary];
+export function press(
+	e: Editor,
+	offset: int32,
+	clicks: int32,
+	extend: boolean,
+	add: boolean,
+): Gesture {
+	const anchor = e.selections.ranges[e.selections.primary].anchor;
 	if (extend) {
-		const next = ranges.slice(0, ranges.length);
-		next[e.selections.primary] = span(primary.anchor, offset);
-		e.select({ ranges: next, primary: e.selections.primary });
-		return { origin: cursorAt(primary.anchor), clicks: 1 };
+		replacePrimary(e, span(anchor, offset));
+		return { origin: cursorAt(anchor), clicks: 1 };
 	}
 	const unit = unitOf(e.doc, offset, clicks);
-	if (add) {
-		const next = ranges.slice(0, ranges.length);
-		next.push(unit);
-		e.select({ ranges: next, primary: (next.length as int32) - 1 });
-	} else {
-		e.select({ ranges: [unit], primary: 0 });
-	}
+	if (add) { addPrimary(e, unit); }
+	else { e.select({ ranges: [unit], primary: 0 }); }
 	return { origin: unit, clicks };
 }
 
 export function drag(e: Editor, g: Gesture, offset: int32): void {
 	const unit = unitOf(e.doc, offset, g.clicks);
-	const forward = unit.end() >= g.origin.end();
-	const dragged = forward ? span(g.origin.start(), unit.end()) : span(g.origin.end(), unit.start());
-	const next = e.selections.ranges.slice(0, e.selections.ranges.length);
-	next[e.selections.primary] = dragged;
-	e.select({ ranges: next, primary: e.selections.primary });
+	const origin = g.origin;
+	const forward = unit.end() >= origin.end();
+	replacePrimary(e, forward ? span(origin.start(), unit.end()) : span(origin.end(), unit.start()));
 }
 
 function editorAt(text: string, offsets: int32[]): Editor {
