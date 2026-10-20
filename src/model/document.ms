@@ -62,17 +62,22 @@ export function mapOffset(offset: int32, change: Change, bias: Bias): int32 {
 	return bias == Bias.Left ? change.from : change.from + change.inserted;
 }
 
+const BOM = "﻿";
+
 export class Document {
 	private rope: Rope;
 	private crlf: boolean;
+	private bom: boolean;
 	private current: int32 = 0;
 	private log: Vec<LoggedChange> = [];
 	private anchors: Vec<AnchorSlot> = [];
 	private freeSlots: Vec<int32> = [];
 
 	constructor(text: string) {
-		this.rope = new Rope(text);
-		this.crlf = text.breaksWithCrlf();
+		this.bom = text.startsWith(BOM);
+		const body = this.bom ? text.byteSlice(BOM.byteLength, text.byteLength) : text;
+		this.rope = new Rope(body);
+		this.crlf = body.breaksWithCrlf();
 	}
 
 	version(): int32 { return this.current; }
@@ -88,7 +93,8 @@ export class Document {
 
 	fileText(): string {
 		const text = this.rope.text();
-		return this.crlf ? text.replaceAll("\n", "\r\n") : text;
+		const body = this.crlf ? text.replaceAll("\n", "\r\n") : text;
+		return this.bom ? BOM + body : body;
 	}
 
 	splice(edit: Edit): Edit {
@@ -168,6 +174,14 @@ test "splice returns the edit that undoes it" {
 	const _back = d.splice(inverse);
 	assert d.text() == "hello world";
 	assert d.version() == 2;
+}
+
+test "a UTF-8 byte order mark stays out of the text and comes back in the file" {
+	const d = new Document("﻿a\r\nb");
+	assert BOM.byteLength == 3;
+	assert d.text() == "a\nb" && d.length() == 3;
+	assert d.fileText() == "﻿a\r\nb";
+	assert new Document("a﻿").fileText() == "a﻿";
 }
 
 test "a file keeps the line ending its first break uses, and inserted CRLF becomes LF" {
