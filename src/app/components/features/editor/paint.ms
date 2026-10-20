@@ -65,7 +65,7 @@ export function painted(
 	const current = doc.lineOf(head);
 	const top = frame.length > 0 ? frame[0].from : 0;
 	const bottom = frame.length > 0 ? frame[frame.length - 1].to : 0;
-	const tones = syntax === null ? [] : (syntax as Syntax).tonesIn(doc, top, bottom);
+	const tones = syntax === null ? [] : syntax.tonesIn(doc, top, bottom);
 	const rows: Row[] = [];
 	for (const r of frame) {
 		const number = r.cell == 0 ? `${r.line + 1}` : "";
@@ -105,7 +105,7 @@ export function painted(
 			const newline = r.last && s.start() <= r.to && s.end() > r.to;
 			if (lo < hi || (newline && lo <= hi)) {
 				const from = cellIn(doc, r, lo);
-				const to = from + cellsBetween(doc, lo, hi, r.cell + from) + (newline ? 1 : 0);
+				const to = from + doc.cellsBetween(lo, hi, r.cell + from) + (newline ? 1 : 0);
 				const left = Math.max(from, view.left);
 				const right = Math.min(to, view.left + view.cols);
 				if (left < right) {

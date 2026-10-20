@@ -23,7 +23,7 @@ export function Overlay(props: {
 			width: props.box().width,
 			height: props.box().height,
 			backgroundColor: props.box().color,
-			opacity: shown === null || (shown as Accessor<boolean>)() ? 1 : 0,
+			opacity: shown === null || shown() ? 1 : 0,
 			pointerEvents: "none",
 		}}
 	/>;

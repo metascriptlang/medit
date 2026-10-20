@@ -56,20 +56,20 @@ export function createFinder(editor: Editor): Finder {
 		},
 		again: (backwards: boolean): void => {
 			if (query() == "") { open(false); }
-			else { found(selectMatch(editor, query(), backwards)); }
+			else { found(editor.selectMatch(query(), backwards)); }
 		},
 		search: (text: string): void => {
 			setQuery(text);
 			if (text == "") { setNote(""); }
-			else { found(selectFirstMatch(editor, text)); }
+			else { found(editor.selectFirstMatch(text)); }
 		},
 		setReplacement: (text: string): void => { setReplacement(text); },
 		replace: (): void => {
-			if (query() != "") { found(replaceMatch(editor, query(), replacement())); }
+			if (query() != "") { found(editor.replaceMatch(query(), replacement())); }
 		},
 		replaceEvery: (): void => {
 			if (query() == "") { return; }
-			const n = replaceAll(editor, query(), replacement());
+			const n = editor.replaceAll(query(), replacement());
 			setNote(n == 1 ? "1 replaced" : `${n} replaced`);
 		},
 	};

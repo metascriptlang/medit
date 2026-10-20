@@ -8,7 +8,6 @@ import { View, ViewHandle } from "../../../../../../neon/src/components/primitiv
 import { Editor } from "../../../../model/editor";
 import {
 	Clip,
-	Command,
 	Context,
 	Gesture,
 	commands,
@@ -88,7 +87,7 @@ export function EditorPane(props: {
 		fill(rows, p.rows);
 		fill(shades, p.shades);
 		fill(carets, p.carets);
-		if (p.primary !== null) { setCaret(p.primary as Box); }
+		if (p.primary !== null) { setCaret(p.primary); }
 		blink.restart();
 	};
 
@@ -158,7 +157,7 @@ export function EditorPane(props: {
 			fail(`the keymap names "${name}", which is no command`);
 			return;
 		}
-		(command as Command)(editor, cx);
+		command(editor, cx);
 		reveal();
 	};
 
