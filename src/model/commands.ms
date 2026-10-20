@@ -125,19 +125,33 @@ function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 	});
 }
 
-function linesOf(doc: Document, s: Sel): int32[] {
+function linesOf(doc: Document, s: Sel): [int32, int32] {
 	const first = doc.lineOf(s.start());
 	let last = doc.lineOf(s.end());
 	if (last > first && doc.lineStart(last) == s.end()) { last -= 1; }
 	return [first, last];
 }
 
+function afterLine(doc: Document, line: int32): int32 {
+	return line + 1 < doc.lineCount() ? doc.lineStart(line + 1) : doc.length();
+}
+
+function lineSpan(doc: Document, at: int32): Sel {
+	const line = doc.lineOf(at);
+	return span(doc.lineStart(line), afterLine(doc, line));
+}
+
+function wordSpan(doc: Document, at: int32): Sel {
+	const [from, to] = wordAt(doc, at);
+	return span(from, to);
+}
+
 function touchedLines(e: Editor): int32[] {
 	const lines: int32[] = [];
 	for (const s of e.selections.ranges) {
-		const range = linesOf(e.doc, s);
-		for (let l = range[0]; l <= range[1]; l++) {
-			if (lines.length == 0 || lines[lines.length - 1] < l) { lines.push(l); }
+		const [first, last] = linesOf(e.doc, s);
+		for (let line = first; line <= last; line++) {
+			if (lines.length == 0 || lines[lines.length - 1] < line) { lines.push(line); }
 		}
 	}
 	return lines;
@@ -155,13 +169,13 @@ function rewriteLines(e: Editor, edits: Edit[]): void {
 	e.end();
 }
 
-function deleteEach(e: Editor, group: string, range: (doc: Document, s: Sel) => int32[]): void {
+function deleteEach(e: Editor, group: string, around: (doc: Document, at: int32) => Sel): void {
 	const edits: Edit[] = [];
 	let lastTo = 0;
 	for (const s of e.selections.ranges) {
-		const r = s.isEmpty() ? range(e.doc, s) : [s.start(), s.end()];
-		const from = Math.max(r[0], lastTo);
-		const to = Math.max(r[1], from);
+		const range = s.isEmpty() ? around(e.doc, s.head) : s;
+		const from = Math.max(range.start(), lastTo);
+		const to = Math.max(range.end(), from);
 		edits.push({ from, to, text: "" });
 		lastTo = to;
 	}
@@ -169,9 +183,15 @@ function deleteEach(e: Editor, group: string, range: (doc: Document, s: Sel) => 
 	e.groupAs(group);
 	const applied = e.change(edits);
 	const next: Sel[] = [];
-	for (const c of applied) { next.push(cursorAt(c.from)); }
+	for (const change of applied) { next.push(cursorAt(change.from)); }
 	e.select({ ranges: next, primary: e.selections.primary });
 	e.end();
+}
+
+function deleteToward(group: string, by: Target): Command {
+	return (e: Editor, cx: Context): void => {
+		deleteEach(e, group, (doc: Document, at: int32): Sel => span(at, by(doc, at)));
+	};
 }
 
 export function insertText(e: Editor, text: string): void {
@@ -225,31 +245,19 @@ function tab(e: Editor): void {
 	insertText(e, "\t");
 }
 
-function wholeLine(doc: Document, s: Sel): int32[] {
-	const line = doc.lineOf(s.head);
-	const end = line + 1 < doc.lineCount() ? doc.lineStart(line + 1) : doc.length();
-	return [doc.lineStart(line), end];
-}
-
 function allEmpty(e: Editor): boolean {
 	for (const s of e.selections.ranges) { if (!s.isEmpty()) { return false; } }
 	return true;
 }
 
 function copied(e: Editor): string {
-	const lines = allEmpty(e);
+	const wholeLines = allEmpty(e);
 	const parts: string[] = [];
 	for (const s of e.selections.ranges) {
-		if (lines) {
-			const r = wholeLine(e.doc, s);
-			const text = e.doc.slice(r[0], r[1]);
-			parts.push(text.endsWith("\n") ? text.slice(0, text.length - 1) : text);
-		} else {
-			parts.push(e.doc.slice(s.start(), s.end()));
-		}
+		parts.push(wholeLines ? e.doc.line(e.doc.lineOf(s.head)) : e.doc.slice(s.start(), s.end()));
 	}
 	const joined = parts.join("\n");
-	return lines ? joined + "\n" : joined;
+	return wholeLines ? joined + "\n" : joined;
 }
 
 function copy(e: Editor, cx: Context): void {
@@ -258,7 +266,7 @@ function copy(e: Editor, cx: Context): void {
 
 function cut(e: Editor, cx: Context): void {
 	cx.clip.write(copied(e));
-	if (allEmpty(e)) { deleteEach(e, "", wholeLine); }
+	if (allEmpty(e)) { deleteEach(e, "", lineSpan); }
 	else { e.replaceSelections(""); }
 }
 
@@ -291,8 +299,8 @@ function selectNextOccurrence(e: Editor): void {
 	const ranges = e.selections.ranges;
 	const primary = ranges[e.selections.primary];
 	if (primary.isEmpty()) {
-		const w = wordAt(e.doc, primary.head);
-		if (w[0] != w[1]) { replacePrimary(e, span(w[0], w[1])); }
+		const word = wordSpan(e.doc, primary.head);
+		if (!word.isEmpty()) { replacePrimary(e, word); }
 		return;
 	}
 	const needle = e.doc.slice(primary.start(), primary.end());
@@ -303,10 +311,8 @@ function selectNextOccurrence(e: Editor): void {
 
 function selectLine(e: Editor): void {
 	reselect(e, (s: Sel): Sel => {
-		const lines = linesOf(e.doc, s);
-		const last = lines[1];
-		const end = last + 1 < e.doc.lineCount() ? e.doc.lineStart(last + 1) : e.doc.length();
-		return span(e.doc.lineStart(lines[0]), end);
+		const [first, last] = linesOf(e.doc, s);
+		return span(e.doc.lineStart(first), afterLine(e.doc, last));
 	});
 }
 
@@ -341,18 +347,10 @@ export function commands(): Map<string, Command> {
 	table.set("newline", (e: Editor, cx: Context): void => { newline(e); });
 	table.set("tab", (e: Editor, cx: Context): void => { tab(e); });
 	table.set("outdent", (e: Editor, cx: Context): void => { outdent(e); });
-	table.set("backspace", (e: Editor, cx: Context): void => {
-		deleteEach(e, "delete", (doc: Document, s: Sel): int32[] => [prevCluster(doc, s.head), s.head]);
-	});
-	table.set("delete", (e: Editor, cx: Context): void => {
-		deleteEach(e, "delete", (doc: Document, s: Sel): int32[] => [s.head, nextCluster(doc, s.head)]);
-	});
-	table.set("deleteWordLeft", (e: Editor, cx: Context): void => {
-		deleteEach(e, "", (doc: Document, s: Sel): int32[] => [wordLeft(doc, s.head), s.head]);
-	});
-	table.set("deleteWordRight", (e: Editor, cx: Context): void => {
-		deleteEach(e, "", (doc: Document, s: Sel): int32[] => [s.head, wordRight(doc, s.head)]);
-	});
+	table.set("backspace", deleteToward("delete", prevCluster));
+	table.set("delete", deleteToward("delete", nextCluster));
+	table.set("deleteWordLeft", deleteToward("", wordLeft));
+	table.set("deleteWordRight", deleteToward("", wordRight));
 	table.set("undo", (e: Editor, cx: Context): void => { const _u = e.undo(); });
 	table.set("redo", (e: Editor, cx: Context): void => { const _r = e.redo(); });
 	table.set("copy", copy);
@@ -375,15 +373,11 @@ export struct Gesture {
 }
 
 function unitOf(doc: Document, offset: int32, clicks: int32): Sel {
-	if (clicks == 2) {
-		const w = wordAt(doc, offset);
-		return span(w[0], w[1]);
-	}
-	if (clicks >= 3) {
-		const line = wholeLine(doc, cursorAt(offset));
-		return span(line[0], line[1]);
-	}
-	return cursorAt(offset);
+	return match (clicks) {
+		2 => wordSpan(doc, offset),
+		_ when clicks >= 3 => lineSpan(doc, offset),
+		_ => cursorAt(offset),
+	};
 }
 
 export function press(
