@@ -43,13 +43,13 @@ function patternOf(q: Query): Pattern {
 	return { needle: fold ? asciiFolded(q.text) : q.text, fold, wholeWord: q.wholeWord };
 }
 
-function forwardToBoundary(this doc: Document, at: int32): int32 {
+export function forwardToBoundary(this doc: Document, at: int32): int32 {
 	let boundary = at;
 	while (boundary < doc.length() && isTrail(doc.byteAt(boundary))) { boundary += 1; }
 	return boundary;
 }
 
-function backToBoundary(this doc: Document, at: int32): int32 {
+export function backToBoundary(this doc: Document, at: int32): int32 {
 	let boundary = at;
 	while (boundary > 0 && isTrail(doc.byteAt(boundary))) { boundary -= 1; }
 	return boundary;

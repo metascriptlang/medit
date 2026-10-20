@@ -14,6 +14,7 @@ import {
 import { Sel, Selections, cursorAt, primaryRange, sameSelections, single, span } from "./selection";
 import { Query, nextMatch, selectAllMatches } from "./find";
 import { pairAround, typeText } from "./pairs";
+import { BracketPair, enclosingBrackets } from "./brackets";
 import { cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
@@ -542,6 +543,19 @@ function toggleComments(e: Editor, cx: Context): void {
 	e.end();
 }
 
+function toEnclosingBracket(e: Editor, cx: Context): void {
+	const doc = e.doc;
+	reselect(e, (s: Sel): Sel => {
+		const found = doc.enclosingBrackets(s.start(), s.end());
+		if (found === null) { return s; }
+		const p = found as BracketPair;
+		const inside = s.start() > p.open && s.end() <= p.close;
+		const onCloser = s.start() >= p.close && s.end() <= p.close + 1;
+		if (onCloser) { return cursorAt(inside ? p.open + 1 : p.open); }
+		return cursorAt(inside ? p.close : p.close + 1);
+	});
+}
+
 export function commands(): Map<string, Command> {
 	const table = new Map<string, Command>();
 	const addMotion = (name: string, selectName: string, motion: Motion): void => {
@@ -566,6 +580,7 @@ export function commands(): Map<string, Command> {
 	table.set("selectLine", selectLine);
 	table.set("selectNextOccurrence", selectNextOccurrence);
 	table.set("selectAllOccurrences", selectAllOccurrences);
+	table.set("moveToEnclosingBracket", toEnclosingBracket);
 	table.set("addCursorAbove", (e: Editor, cx: Context): void => { addCursor(e, -1); });
 	table.set("addCursorBelow", (e: Editor, cx: Context): void => { addCursor(e, 1); });
 	table.set("collapse", (e: Editor, cx: Context): void => {
@@ -808,6 +823,23 @@ test "typed letters undo as one word" {
 	assert e.doc.text() == "ab";
 	run(e, "undo");
 	assert e.doc.text() == "";
+}
+
+test "the caret goes to the other end of the pair around it" {
+	const run = runner();
+	const e = editorAt("f(a[b]c)", [2]);
+	run(e, "moveToEnclosingBracket");
+	assert heads(e) == "7";
+	run(e, "moveToEnclosingBracket");
+	assert heads(e) == "2";
+	e.select(single(8));
+	run(e, "moveToEnclosingBracket");
+	assert heads(e) == "1";
+	run(e, "moveToEnclosingBracket");
+	assert heads(e) == "8";
+	e.select(single(0));
+	run(e, "moveToEnclosingBracket");
+	assert heads(e) == "0";
 }
 
 test "next occurrence selects the word, then the next match, wrapping" {
