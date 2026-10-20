@@ -139,8 +139,8 @@ function wordSpan(doc: Document, at: int32): Sel {
 	return span(from, to);
 }
 
-function touchedLines(e: Editor): int32[] {
-	const lines: int32[] = [];
+function touchedLines(e: Editor): Vec<int32> {
+	let lines: Vec<int32> = [];
 	for (const s of e.selections.ranges) {
 		const [first, last] = linesOf(e.doc, s);
 		for (let line = first; line <= last; line++) {
@@ -250,7 +250,7 @@ function allEmpty(e: Editor): boolean {
 
 function copied(e: Editor): string {
 	const wholeLines = allEmpty(e);
-	const parts: string[] = [];
+	let parts: Vec<string> = [];
 	for (const s of e.selections.ranges) {
 		parts.push(wholeLines ? e.doc.line(e.doc.lineOf(s.head)) : e.doc.slice(s.start(), s.end()));
 	}
@@ -397,7 +397,7 @@ export function drag(e: Editor, g: Gesture, offset: int32): void {
 	replacePrimary(e, span(anchor, forward ? unit.end() : unit.start()));
 }
 
-function editorAt(text: string, offsets: int32[]): Editor {
+function editorAt(text: string, offsets: Span<int32>): Editor {
 	const e = new Editor(new Document(text));
 	const ranges: Sel[] = [];
 	for (const o of offsets) { ranges.push(cursorAt(o)); }
