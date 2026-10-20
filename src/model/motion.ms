@@ -1,9 +1,7 @@
 import { Document } from "./document";
+import { cellsIn, nextClusterIn, offsetAtCellIn, prevClusterIn } from "../text/clusters";
 
-export const TAB_SIZE: int32 = 4;
 const NEWLINE: int32 = 10;
-const TAB: int32 = 9;
-const ZWJ: int32 = 0x200D;
 const CLUSTER_LOOKBACK: int32 = 64;
 
 enum CharClass {
@@ -13,129 +11,29 @@ enum CharClass {
 	Punct,
 }
 
-function isTrail(b: int32): boolean { return (b & 0xC0) == 0x80; }
-
-function stepAt(doc: Document, at: int32): int32 {
-	const lead = doc.byteAt(at);
-	const n = lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
-	return Math.min(n, doc.length() - at);
-}
-
-function codePointAt(doc: Document, at: int32): int32 {
-	const lead = doc.byteAt(at);
-	const n = stepAt(doc, at);
-	if (n == 1) { return lead; }
-	let cp = lead & (n == 2 ? 0x1F : n == 3 ? 0x0F : 0x07);
-	for (let k = 1; k < n; k++) { cp = (cp << 6) | (doc.byteAt(at + k) & 0x3F); }
-	return cp;
-}
-
-// Not full UAX #29: Hangul jamo, Indic conjuncts and regional-indicator flags split; widen this when one of them is typed.
-function continuesCluster(cp: int32): boolean {
-	return (cp >= 0x0300 && cp <= 0x036F) ||
-		(cp >= 0x1AB0 && cp <= 0x1AFF) ||
-		(cp >= 0x1DC0 && cp <= 0x1DFF) ||
-		(cp >= 0x20D0 && cp <= 0x20FF) ||
-		(cp >= 0xFE00 && cp <= 0xFE0F) ||
-		(cp >= 0xFE20 && cp <= 0xFE2F) ||
-		(cp >= 0x1F3FB && cp <= 0x1F3FF) ||
-		(cp >= 0xE0020 && cp <= 0xE007F);
-}
-
 export function nextCluster(doc: Document, offset: int32): int32 {
-	const total = doc.length();
-	if (offset >= total) { return total; }
-	let at = offset + stepAt(doc, offset);
-	while (at < total) {
-		const cp = codePointAt(doc, at);
-		if (cp == ZWJ) {
-			at += stepAt(doc, at);
-			if (at < total) { at += stepAt(doc, at); }
-		} else if (continuesCluster(cp)) {
-			at += stepAt(doc, at);
-		} else {
-			break;
-		}
-	}
-	return at;
+	if (offset >= doc.length()) { return doc.length(); }
+	if (doc.byteAt(offset) == NEWLINE) { return offset + 1; }
+	const rest = doc.slice(offset, doc.lineEnd(doc.lineOf(offset)));
+	return offset + nextClusterIn(rest.asBytes(), 0);
 }
 
 export function prevCluster(doc: Document, offset: int32): int32 {
 	if (offset <= 0) { return 0; }
 	if (doc.byteAt(offset - 1) == NEWLINE) { return offset - 1; }
-	const lineStart = doc.lineStart(doc.lineOf(offset));
-	let from = Math.max(lineStart, offset - CLUSTER_LOOKBACK);
-	while (from > lineStart && !startsCluster(doc, from)) { from -= 1; }
-	let last = from;
-	let at = from;
-	while (at < offset) {
-		last = at;
-		at = nextCluster(doc, at);
-	}
-	return last;
-}
-
-function startsCluster(doc: Document, at: int32): boolean {
-	if (isTrail(doc.byteAt(at))) { return false; }
-	const cp = codePointAt(doc, at);
-	if (cp == ZWJ || continuesCluster(cp)) { return false; }
-	if (at == 0) { return true; }
-	let prev = at - 1;
-	while (prev > 0 && isTrail(doc.byteAt(prev))) { prev -= 1; }
-	return codePointAt(doc, prev) != ZWJ;
-}
-
-// UAX #11 East Asian Width W and F, with emoji blocks taken whole: a few text-presentation symbols count two.
-const WIDE: int32[] = [
-	0x1100, 0x115F, 0x231A, 0x231B, 0x2329, 0x232A, 0x23E9, 0x23EC, 0x23F0, 0x23F0, 0x23F3, 0x23F3,
-	0x25FD, 0x25FE, 0x2614, 0x2615, 0x2648, 0x2653, 0x267F, 0x267F, 0x2693, 0x2693, 0x26A1, 0x26A1,
-	0x26AA, 0x26AB, 0x26BD, 0x26BE, 0x26C4, 0x26C5, 0x26CE, 0x26CE, 0x26D4, 0x26D4, 0x26EA, 0x26EA,
-	0x26F2, 0x26F3, 0x26F5, 0x26F5, 0x26FA, 0x26FA, 0x26FD, 0x26FD, 0x2705, 0x2705, 0x270A, 0x270B,
-	0x2728, 0x2728, 0x274C, 0x274C, 0x274E, 0x274E, 0x2753, 0x2755, 0x2757, 0x2757, 0x2795, 0x2797,
-	0x27B0, 0x27B0, 0x27BF, 0x27BF, 0x2B1B, 0x2B1C, 0x2B50, 0x2B50, 0x2B55, 0x2B55, 0x2E80, 0x303E,
-	0x3040, 0xA4CF, 0xA960, 0xA97F, 0xAC00, 0xD7A3, 0xF900, 0xFAFF, 0xFE10, 0xFE19, 0xFE30, 0xFE6F,
-	0xFF00, 0xFF60, 0xFFE0, 0xFFE6, 0x16FE0, 0x16FE4, 0x17000, 0x18AFF, 0x1B000, 0x1B2FF,
-	0x1F004, 0x1F004, 0x1F0CF, 0x1F0CF, 0x1F18E, 0x1F18E, 0x1F191, 0x1F19A, 0x1F200, 0x1F2FF,
-	0x1F300, 0x1F64F, 0x1F680, 0x1F6FF, 0x1F7E0, 0x1F7EB, 0x1F900, 0x1F9FF, 0x1FA70, 0x1FAFF,
-	0x20000, 0x2FFFD, 0x30000, 0x3FFFD,
-];
-
-function isWide(cp: int32): boolean {
-	if (cp < 0x1100) { return false; }
-	for (let k = 0; k < WIDE.length; k += 2) {
-		if (cp < WIDE[k]) { return false; }
-		if (cp <= WIDE[k + 1]) { return true; }
-	}
-	return false;
-}
-
-export function clusterCells(doc: Document, at: int32, cell: int32): int32 {
-	const lead = doc.byteAt(at);
-	if (lead == TAB) { return TAB_SIZE - cell % TAB_SIZE; }
-	if (lead < 0x80) { return 1; }
-	return isWide(codePointAt(doc, at)) ? 2 : 1;
+	const from = Math.max(doc.lineStart(doc.lineOf(offset)), offset - CLUSTER_LOOKBACK);
+	const window = doc.slice(from, offset);
+	return from + prevClusterIn(window.asBytes(), offset - from);
 }
 
 export function cellsBetween(doc: Document, from: int32, to: int32, cell: int32): int32 {
-	let at = from;
-	let c = cell;
-	while (at < to) {
-		c += clusterCells(doc, at, c);
-		at = nextCluster(doc, at);
-	}
-	return c - cell;
+	const text = doc.slice(from, to);
+	return cellsIn(text.asBytes(), 0, to - from, cell);
 }
 
 export function offsetAtCell(doc: Document, from: int32, to: int32, cell: int32, target: int32): int32 {
-	let at = from;
-	let c = cell;
-	while (at < to) {
-		const w = clusterCells(doc, at, c);
-		if (c + w > cell + target) { return (cell + target - c) * 2 <= w ? at : nextCluster(doc, at); }
-		c += w;
-		at = nextCluster(doc, at);
-	}
-	return at;
+	const text = doc.slice(from, to);
+	return from + offsetAtCellIn(text.asBytes(), 0, to - from, cell, target);
 }
 
 function classOf(code: int32): CharClass {
