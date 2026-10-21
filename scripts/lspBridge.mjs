@@ -8,7 +8,8 @@
 // refuses a page served from another host, since a WebSocket is not held to the page's origin.
 // --trace prints the start of every chunk that passes, page to server as ">", back as "<".
 // --root starts the server in <dir> and lets the page list (GET /files: git's tracked and
-// untracked files, else a walk), read and save (GET/PUT /file?path=) the files under it.
+// untracked files, else a walk), read and save (GET/PUT /file?path=) the files under it, and
+// search them (GET /search?q=&case=1&word=1).
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
@@ -167,6 +168,94 @@ function serveList(req, res) {
 	answer(res, 200, { ...cors, "Content-Type": "application/json; charset=utf-8" }, JSON.stringify({ rootUri: pathToFileURL(root).href, files: projectFiles() }));
 }
 
+// Keep matching, cutting and limits in step with src/model/projectSearch.ms: the page merges
+// these hits with its own searches of open files.
+const MAX_RESULT_FILES = 5000;
+const MAX_RESULT_HITS = 10000;
+const HIT_TEXT_BYTES = 240;
+const HIT_LEAD_BYTES = 40;
+const BINARY_PROBE_BYTES = 8000;
+const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
+const isTrail = (b) => (b & 0xc0) === 0x80;
+const isWordByte = (b) => b === 0x5f || (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) || b >= 0x80;
+const folded = (bytes) => bytes.map((b) => (b >= 0x41 && b <= 0x5a ? b + 0x20 : b));
+
+function documentBytes(raw) {
+	const body = raw.subarray(0, 3).equals(BOM) ? raw.subarray(3) : raw;
+	return body.includes(0x0d) ? Buffer.from(body.toString("latin1").replaceAll("\r\n", "\n"), "latin1") : body;
+}
+
+function hitOn(lineNumber, line, from, to) {
+	const startOf = (at) => {
+		while (at > 0 && isTrail(line[at])) at -= 1;
+		return at;
+	};
+	let indent = 0;
+	while (indent < line.length && (line[indent] === 0x20 || line[indent] === 0x09)) indent += 1;
+	let textFrom = Math.min(indent, from);
+	if (to - textFrom > HIT_TEXT_BYTES) textFrom = startOf(Math.max(textFrom, from - HIT_LEAD_BYTES));
+	const textTo = startOf(Math.min(line.length, textFrom + HIT_TEXT_BYTES));
+	return { line: lineNumber, from, to, text: line.toString("utf8", textFrom, textTo), textFrom };
+}
+
+function hitsIn(bytes, needle, fold, wholeWord, room) {
+	const haystack = fold ? folded(bytes) : bytes;
+	const word = (at) => at >= 0 && at < bytes.length && isWordByte(bytes[at]);
+	const n = needle.length;
+	const hits = [];
+	let lineNumber = 0;
+	let lineStart = 0;
+	let at = haystack.indexOf(needle);
+	while (at >= 0) {
+		if (wholeWord && ((word(at) && word(at - 1)) || (word(at + n - 1) && word(at + n)))) {
+			at = haystack.indexOf(needle, at + 1);
+			continue;
+		}
+		if (hits.length === room) return [hits, true];
+		for (let k = bytes.indexOf(0x0a, lineStart); k >= 0 && k < at; k = bytes.indexOf(0x0a, lineStart)) {
+			lineNumber += 1;
+			lineStart = k + 1;
+		}
+		let lineEnd = bytes.indexOf(0x0a, lineStart);
+		if (lineEnd < 0) lineEnd = bytes.length;
+		hits.push(hitOn(lineNumber, bytes.subarray(lineStart, lineEnd), at - lineStart, Math.min(lineEnd, at + n) - lineStart));
+		at = haystack.indexOf(needle, at + n);
+	}
+	return [hits, false];
+}
+
+function searched(text, caseSensitive, wholeWord) {
+	const typed = Buffer.from(text, "utf8");
+	const needle = caseSensitive ? typed : folded(typed);
+	const files = [];
+	let matches = 0;
+	for (const key of projectFiles()) {
+		if (files.length === MAX_RESULT_FILES || matches === MAX_RESULT_HITS) return { files, matches, limitReached: true };
+		let raw;
+		try { raw = readFileSync(resolve(root, key)); } catch { continue; }
+		if (raw.subarray(0, BINARY_PROBE_BYTES).includes(0)) continue;
+		const [hits, cut] = hitsIn(documentBytes(raw), needle, !caseSensitive, wholeWord, MAX_RESULT_HITS - matches);
+		if (hits.length > 0) {
+			files.push({ key, hits });
+			matches += hits.length;
+		}
+		if (cut) return { files, matches, limitReached: true };
+	}
+	return { files, matches, limitReached: false };
+}
+
+function serveSearch(req, res, url) {
+	const cors = corsFor(req, res);
+	if (cors === null) return;
+	if (root === null) return answer(res, 404, cors, "the bridge searches no files: start it with --root <dir>\n");
+	if (req.method !== "GET") return answer(res, 405, cors, `no ${req.method} on a search\n`);
+	const text = url.searchParams.get("q") ?? "";
+	if (text.length === 0) return answer(res, 400, cors, "a search needs a non-empty q\n");
+	const found = searched(text, url.searchParams.get("case") === "1", url.searchParams.get("word") === "1");
+	answer(res, 200, { ...cors, "Content-Type": "application/json; charset=utf-8" }, JSON.stringify(found));
+}
+
 function serveFile(req, res, url) {
 	const cors = corsFor(req, res);
 	if (cors === null) return;
@@ -199,6 +288,7 @@ const server = createServer((req, res) => {
 	const url = new URL(req.url, "http://127.0.0.1");
 	if (url.pathname === "/file") return serveFile(req, res, url);
 	if (url.pathname === "/files") return serveList(req, res);
+	if (url.pathname === "/search") return serveSearch(req, res, url);
 	answer(res, 426, {}, "medic lsp bridge: connect with a WebSocket\n");
 });
 server.on("upgrade", (req, socket) => {
