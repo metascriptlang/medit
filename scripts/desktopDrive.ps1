@@ -2,6 +2,7 @@
 #   pwsh scripts/desktopDrive.ps1 <exe> <file> <outDir> <step>...
 # Steps: wait:<ms>  shot:<name>  key:[ctrl+][alt+][shift+]<key>[*n]  type:<text>  click:<x>,<y>  drag:<x1>,<y1>,<x2>,<y2>
 # Coordinates are client pixels. The app's console output goes to <outDir>/drive.log.
+# Keys reach the editor only after a click on it; a sent WM_ACTIVATE or WM_SETFOCUS does not do it.
 param([string]$Exe, [string]$File, [string]$OutDir, [Parameter(ValueFromRemainingArguments)][string[]]$Steps)
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -27,7 +28,8 @@ $root = Split-Path $PSScriptRoot
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 $vks = @{ ArrowLeft = 0x25; ArrowUp = 0x26; ArrowRight = 0x27; ArrowDown = 0x28; Enter = 0x0D; Backspace = 0x08;
-  Tab = 0x09; Escape = 0x1B; Home = 0x24; End = 0x23; Delete = 0x2E; PageUp = 0x21; PageDown = 0x22; Insert = 0x2D }
+  Tab = 0x09; Escape = 0x1B; Home = 0x24; End = 0x23; Delete = 0x2E; PageUp = 0x21; PageDown = 0x22; Insert = 0x2D;
+  Space = 0x20 }
 $extended = @(0x25, 0x26, 0x27, 0x28, 0x2E, 0x24, 0x23, 0x21, 0x22, 0x2D)
 $modifiers = @{ ctrl = @(0x11, 0xA2); alt = @(0x12, 0xA4); shift = @(0x10, 0xA0) }
 $p = Start-Process -FilePath $Exe -ArgumentList "`"$File`"" -WorkingDirectory $root -PassThru -RedirectStandardOutput "$OutDir\drive.log"
