@@ -1125,8 +1125,12 @@ export function commands(): Map<string, Command> {
 	table.set("find", (e: Editor, cx: Context): void => { cx.findBar(false); });
 	table.set("goToLine", (e: Editor, cx: Context): void => { cx.goToLine(); });
 	table.set("replace", (e: Editor, cx: Context): void => { cx.findBar(true); });
-	table.set("findNext", (e: Editor, cx: Context): void => { cx.findAgain(false); });
-	table.set("findPrev", (e: Editor, cx: Context): void => { cx.findAgain(true); });
+	table.set("findNext", (e: Editor, cx: Context): void => {
+		if (!cx.workspace.stepSearch(true)) { cx.findAgain(false); }
+	});
+	table.set("findPrev", (e: Editor, cx: Context): void => {
+		if (!cx.workspace.stepSearch(false)) { cx.findAgain(true); }
+	});
 	table.set("hover", (e: Editor, cx: Context): void => { cx.hover(); });
 	table.set("goToDefinition", (e: Editor, cx: Context): void => { cx.goToDefinition(); });
 	table.set("nextDiagnostic", (e: Editor, cx: Context): void => { cx.goToDiagnostic(true); });
@@ -1158,6 +1162,7 @@ export function commands(): Map<string, Command> {
 	table.set("outline", (e: Editor, cx: Context): void => { cx.outline(); });
 	table.set("palette", (e: Editor, cx: Context): void => { cx.palette(); });
 	table.set("quickOpen", (e: Editor, cx: Context): void => { cx.workspace.quickOpen(); });
+	table.set("projectSearch", (e: Editor, cx: Context): void => { cx.workspace.projectSearch(); });
 	table.set("closeTab", (e: Editor, cx: Context): void => { cx.workspace.closeTab(); });
 	table.set("reopenClosedTab", (e: Editor, cx: Context): void => { cx.workspace.reopenClosed(); });
 	table.set("nextTab", (e: Editor, cx: Context): void => { cx.workspace.stepTab(true); });

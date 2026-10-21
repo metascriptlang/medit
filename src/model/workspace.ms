@@ -7,6 +7,8 @@ export interface PaneHandle {
 
 export interface Workspace {
 	quickOpen: () => void;
+	projectSearch: () => void;
+	stepSearch: (forward: boolean) => boolean;
 	openAt: (uri: string, line: int32, character: int32) => string | null;
 	closeTab: () => void;
 	activateTab: (index: int32) => void;
@@ -22,6 +24,8 @@ export interface Workspace {
 export function noWorkspace(): Workspace {
 	return {
 		quickOpen: (): void => {},
+		projectSearch: (): void => {},
+		stepSearch: (forward: boolean): boolean => false,
 		openAt: (uri: string, line: int32, character: int32): string | null => `${uri} is not open`,
 		closeTab: (): void => {},
 		activateTab: (index: int32): void => {},

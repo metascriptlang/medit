@@ -140,7 +140,7 @@ export function defaultKeymap(): Keymap {
 		["alt+shift+f", "format"], ["ctrl+k ctrl+f", "formatSelections"],
 		["F2", "rename"], ["shift+F12", "findReferences"], ["alt+shift+F12", "findReferences"],
 		["F1", "palette"], ["ctrl+shift+p", "palette"],
-		["ctrl+p", "quickOpen"], ["ctrl+e", "quickOpen"],
+		["ctrl+p", "quickOpen"], ["ctrl+e", "quickOpen"], ["ctrl+shift+f", "projectSearch"],
 		["ctrl+w", "closeTab"], ["ctrl+F4", "closeTab"], ["ctrl+shift+t", "reopenClosedTab"],
 		["ctrl+PageDown", "nextTab"], ["ctrl+PageUp", "previousTab"],
 		["ctrl+Tab", "switchTabs"], ["ctrl+shift+Tab", "switchTabsBack"],
@@ -312,4 +312,12 @@ test "fold keys: ctrl+shift+brackets fold and unfold, the rest follow ctrl+k" {
 	};
 	assert after("l") == "toggleFold" && after("[") == "foldRecursive" && after("]") == "unfoldRecursive";
 	assert after("0") == "foldAll" && after("j") == "unfoldAll" && after("1") == "foldAtLevel1" && after("9") == "foldAtLevel9";
+}
+
+test "ctrl+shift+f searches the project, and F3 keeps its find meaning" {
+	const m = defaultKeymap();
+	assert chord(m, press("F", true, true)) == "projectSearch";
+	assert chord(m, press("f", false, false)) == "Unbound";
+	assert chord(m, { key: "F", ctrl: false, alt: true, shift: true, meta: false }) == "format";
+	assert chord(m, press("F3", false, false)) == "findNext" && chord(m, press("F3", false, true)) == "findPrev";
 }
