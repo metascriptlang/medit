@@ -8,6 +8,7 @@ import { OutlineItem } from "../model/outline";
 import { CodeAction } from "../model/actions";
 import { Inlay } from "../model/inlays";
 import { Server, Span, Target } from "./server";
+import { sameFile } from "./uri";
 
 export interface Link {
 	send: (bytes: string) => boolean;
@@ -77,7 +78,9 @@ export class Session {
 	}
 
 	definition(offset: int32, done: (found: Target[]) => void): int32 {
-		return this.server.definition(this.doc, offset, done);
+		return this.server.definition(this.doc, offset, (found: Target[]): void => {
+			done(found.map((t: Target): Target => sameFile(t.uri, this.uri) ? t : { uri: t.uri, range: t.range, here: null }));
+		});
 	}
 
 	completion(offset: int32, trigger: string | null, done: (items: Completion[], incomplete: boolean) => void): int32 {
@@ -120,7 +123,7 @@ export class Session {
 				uri: t.uri,
 				line: t.range.start.line,
 				character: t.range.start.character,
-				here: t.here === null ? null : [(t.here as Span).from, (t.here as Span).to],
+				here: t.here === null || !sameFile(t.uri, this.uri) ? null : [(t.here as Span).from, (t.here as Span).to],
 			})));
 		});
 	}

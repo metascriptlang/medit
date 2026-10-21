@@ -251,7 +251,7 @@ when (testBuild) {
 		assert pipe.sent[pipe.sent.length - 1].includes("\"id\":51,\"result\":{\"applied\":false");
 	}
 
-	test "references place their ranges in every open document" {
+	test "references place their ranges in the asked document only, and name the others by line" {
 		const pipe = new Pipe();
 		const connection = new Connection(pipe.link(), "msc lsp", null, null);
 		const a = connection.open(new Document("ab = 1;\n"), "file:///a.ms", "metascript");
@@ -264,8 +264,7 @@ when (testBuild) {
 		pipe.deliver(`{"jsonrpc":"2.0","id":${id},"result":[{"uri":"file:///a.ms","range":${at(0, 0, 2)}},`
 			+ `{"uri":"file:///b.ms","range":${at(0, 4, 6)}},{"uri":"file:///c.ms","range":${at(0, 0, 2)}}]}`);
 		const f = found as Place[];
-		assert f.length == 3 && f[0].here !== null && f[1].here !== null && f[2].here === null;
-		const inB = f[1].here as [int32, int32];
-		assert inB[0] == 6 && inB[1] == 8;
+		assert f.length == 3 && f[0].here !== null && f[1].here === null && f[2].here === null;
+		assert f[1].uri == "file:///b.ms" && f[1].line == 0 && f[1].character == 4;
 	}
 }
