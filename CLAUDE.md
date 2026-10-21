@@ -72,10 +72,12 @@ Run from the repository root: fonts are loaded by relative path.
   keystroke's reparse at three places and the tones of 40 lines.
 - Web (`runCanvas`, `--os=emcc`): `sh scripts/buildWeb.sh [gl] [wgpu]` writes `out/web/`; serve
   that directory and open `index.html` (`?gl` / `?wgpu` force a backend).
-- Language server in the web build: `node scripts/lspBridge.mjs [port] [--trace] [-- command]`
-  carries a server's stdio over a WebSocket (default port 8766, `msc lsp`); open
+- Language server in the web build: `node scripts/lspBridge.mjs [port] [--trace] [--root <dir>]
+  [-- command]` carries a server's stdio over a WebSocket (default port 8766, `msc lsp`); open
   `index.html?lsp=ws://127.0.0.1:8766`. The page's sample is `file:///medic/sample.ms`, which the
-  server sees only through the protocol.
+  server sees only through the protocol. With `--root`, the server starts in `<dir>` and
+  `index.html?lsp=...&file=<path under dir>` opens and saves that file through the bridge, so the
+  server reads it and its imports from disk. The bridge answers pages served from this machine only.
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
   header). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
 - Drive the desktop build: `pwsh scripts/desktopDrive.ps1 out/medic.exe <file> <outDir> <step>...`
