@@ -516,7 +516,7 @@ export function EditorPane(props: {
 	};
 	const formatter = new Formatter(editor, {
 		format: (range: [int32, int32] | null, done: (edits: Edit[] | null, error: string | null) => void): int32 =>
-			session === null ? -1 : (session as Session).format(range, (edits: Edit[] | null, error: string | null): void => {
+			session === null ? -1 : (session as Session).format(range, editor.indent, (edits: Edit[] | null, error: string | null): void => {
 				done(edits, error);
 				paint();
 			}),
