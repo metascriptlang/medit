@@ -100,7 +100,7 @@ export class CodeActions {
 				return;
 			}
 			if (others > 0) {
-				this.told(`${action.title} refused: it also changes ${others} other file${others == 1 ? "" : "s"}, and medic edits one file`);
+				this.told(`${action.title} refused: it also changes ${others} file${others == 1 ? " that is" : "s that are"} not open, and medic edits open files only`);
 				return;
 			}
 			const skipped = acceptLater(this.editor, edits as Edit[], this.editor.doc.version(), "");
@@ -196,7 +196,7 @@ when (testBuild) {
 		fake.answers[3]([action("Import x")]);
 		actions.pick(0);
 		fake.results[0](null, 2, null);
-		assert notes[1] == "Import x refused: it also changes 2 other files, and medic edits one file";
+		assert notes[1] == "Import x refused: it also changes 2 files that are not open, and medic edits open files only";
 		assert e.doc.text() == "abc\n";
 		actions.toggle();
 		fake.answers[4]([action("Fix")]);

@@ -53,16 +53,29 @@ export class References {
 	private provider: ReferenceProvider;
 	private told: (message: string) => void;
 	private changed: () => void;
+	private away: (p: Place) => string | null;
 	private held: Held[] = [];
 	private origin: Selections | null = null;
 	private asked: int32 = -1;
 	private seq: int32 = 0;
 
-	constructor(editor: Editor, provider: ReferenceProvider, told: (message: string) => void, changed: () => void) {
+	constructor(
+		editor: Editor,
+		provider: ReferenceProvider,
+		told: (message: string) => void,
+		changed: () => void,
+		away: (p: Place) => string | null,
+	) {
 		this.editor = editor;
 		this.provider = provider;
 		this.told = told;
 		this.changed = changed;
+		this.away = away;
+	}
+
+	private go(p: Place): void {
+		const failed = this.away(p);
+		if (failed !== null) { this.told(failed as string); }
 	}
 
 	find(): void {
@@ -112,8 +125,8 @@ export class References {
 	confirm(): void {
 		if (!this.shown()) { return; }
 		const p = this.places()[this.selected];
-		if (p.here === null) { this.told(`reference in ${p.uri}:${p.line + 1}:${p.character + 1}`); }
 		this.close();
+		if (p.here === null) { this.go(p); }
 	}
 
 	dismiss(): void {
@@ -140,7 +153,7 @@ export class References {
 		}
 		if (others.length == 1) {
 			const p = others[0];
-			if (p.here === null) { this.told(`reference in ${p.uri}:${p.line + 1}:${p.character + 1}`); }
+			if (p.here === null) { this.go(p); }
 			else { this.editor.select(single((p.here as [int32, int32])[0])); }
 			this.changed();
 			return;
@@ -204,7 +217,8 @@ when (testBuild) {
 		const e = new Editor(new Document(text));
 		const fake = new Fake();
 		const notes: string[] = [];
-		return [e, fake, new References(e, fake.provider(), (m: string): void => { notes.push(m); }, (): void => {}), notes];
+		const away = (p: Place): string | null => `${p.uri}:${p.line + 1}:${p.character + 1} is not open`;
+		return [e, fake, new References(e, fake.provider(), (m: string): void => { notes.push(m); }, (): void => {}, away), notes];
 	}
 
 	function at(from: int32, to: int32): Place {
@@ -225,7 +239,7 @@ when (testBuild) {
 		refs.move(MenuMove.Last);
 		assert refs.selected == 3 && e.selections.primaryRange().head == 10;
 		refs.confirm();
-		assert !refs.shown() && notes[0] == "reference in file:///b.ms:4:3";
+		assert !refs.shown() && notes[0] == "file:///b.ms:4:3 is not open";
 		refs.find();
 		fake.answers[1]([at(0, 2), at(5, 7), at(10, 12)]);
 		refs.move(MenuMove.Previous);

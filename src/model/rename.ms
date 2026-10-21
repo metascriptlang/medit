@@ -96,7 +96,7 @@ export class Renamer {
 				return;
 			}
 			if (others > 0) {
-				this.told(`rename refused: it also changes ${others} other file${others == 1 ? "" : "s"}, and medic edits one file`);
+				this.told(`rename refused: it also changes ${others} file${others == 1 ? " that is" : "s that are"} not open, and medic edits open files only`);
 				return;
 			}
 			const skipped = acceptLater(this.editor, edits as Edit[], doc.version(), "");
@@ -211,7 +211,7 @@ when (testBuild) {
 		r.start();
 		r.confirm("cd");
 		fake.renameAnswers[0]([{ from: 0, to: 2, text: "cd" }], 2, null);
-		assert e.doc.text() == "ab + ab" && notes[0] == "rename refused: it also changes 2 other files, and medic edits one file";
+		assert e.doc.text() == "ab + ab" && notes[0] == "rename refused: it also changes 2 files that are not open, and medic edits open files only";
 		r.start();
 		r.confirm("cd");
 		fake.renameAnswers[1](null, 0, "not a symbol");
