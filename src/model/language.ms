@@ -7,6 +7,21 @@ const LINE_COMMENTS: Array<[string, string[]]> = [
 	["-- ", ["lua", "sql", "hs"]],
 ];
 
+export struct BlockComment {
+	open: string;
+	close: string;
+}
+
+const BLOCK_COMMENTS: Array<[BlockComment, string[]]> = [
+	[{ open: "/* ", close: " */" }, [
+		"ms", "cms", "jms", "ems", "wms", "rms", "ts", "tsx", "js", "jsx", "mjs",
+		"c", "h", "cc", "cpp", "hpp", "rs", "go", "java", "kt", "swift", "cs", "dart", "css", "sql",
+	]],
+	[{ open: "<!-- ", close: " -->" }, ["html", "xml"]],
+	[{ open: "--[[ ", close: " ]]" }, ["lua"]],
+	[{ open: "{- ", close: " -}" }, ["hs"]],
+];
+
 export struct Language {
 	id: string;
 	server: string;
@@ -49,6 +64,24 @@ export function lineCommentOf(path: string): string | null {
 		if (types.includes(type as string)) { return marker; }
 	}
 	return null;
+}
+
+export function blockCommentOf(path: string): BlockComment | null {
+	const type = typeOf(path);
+	if (type === null) { return null; }
+	for (const [markers, types] of BLOCK_COMMENTS) {
+		if (types.includes(type as string)) { return markers; }
+	}
+	return null;
+}
+
+test "block comment markers follow the file type, and some types have none" {
+	const ms = blockCommentOf("src/app.ms");
+	assert ms !== null && ms.open == "/* " && ms.close == " */";
+	const lua = blockCommentOf("init.lua");
+	assert lua !== null && lua.open == "--[[ ";
+	assert blockCommentOf("main.zig") === null;
+	assert blockCommentOf("run.py") === null;
 }
 
 test "a line comment marker follows the file type" {

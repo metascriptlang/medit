@@ -1,4 +1,5 @@
 import { Anchor, Bias, Change, Document, Edit, mapOffset } from "./document";
+import { BlockComment } from "./language";
 import {
 	Sel,
 	Selections,
@@ -45,6 +46,7 @@ export class Editor {
 	private placedAfter: Vec<Placed> = [];
 	caseSensitive: boolean = false;
 	lineComment: string | null = null;
+	blockComment: BlockComment | null = null;
 	private autoclosed: Autoclosed[] = [];
 	wordwiseNext: Selections | null = null;
 	private undos: Vec<Step> = [];

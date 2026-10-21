@@ -2,7 +2,7 @@ import { NeonNode } from "../../../neon/src/render/node";
 import { Void } from "../../../neon/src/components/primitives";
 import { Document } from "../model/document";
 import { Editor } from "../model/editor";
-import { Language, languageOf, lineCommentOf } from "../model/language";
+import { Language, blockCommentOf, languageOf, lineCommentOf } from "../model/language";
 import { Clip } from "../model/commands";
 import { Syntax, covers } from "../syntax/syntax";
 import { Link, Session } from "../lsp/session";
@@ -28,6 +28,7 @@ export function App(
 ): NeonNode {
 	const editor = new Editor(new Document(text));
 	editor.lineComment = lineCommentOf(path);
+	editor.blockComment = blockCommentOf(path);
 	const syntax = covers(path) && editor.doc.length() <= HIGHLIGHT_LIMIT ? new Syntax() : null;
 	const language = languageOf(path);
 	let session: Session | null = null;
