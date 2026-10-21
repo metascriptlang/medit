@@ -33,6 +33,9 @@ export interface Context {
 	findBar: (replace: boolean) => void;
 	goToLine: () => void;
 	findAgain: (backwards: boolean) => void;
+	hover: () => void;
+	goToDefinition: () => void;
+	goToDiagnostic: (forward: boolean) => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -640,6 +643,10 @@ export function commands(): Map<string, Command> {
 	table.set("replace", (e: Editor, cx: Context): void => { cx.findBar(true); });
 	table.set("findNext", (e: Editor, cx: Context): void => { cx.findAgain(false); });
 	table.set("findPrev", (e: Editor, cx: Context): void => { cx.findAgain(true); });
+	table.set("hover", (e: Editor, cx: Context): void => { cx.hover(); });
+	table.set("goToDefinition", (e: Editor, cx: Context): void => { cx.goToDefinition(); });
+	table.set("nextDiagnostic", (e: Editor, cx: Context): void => { cx.goToDiagnostic(true); });
+	table.set("prevDiagnostic", (e: Editor, cx: Context): void => { cx.goToDiagnostic(false); });
 	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -692,6 +699,19 @@ function editorAt(text: string, offsets: Span<int32>): Editor {
 	return e;
 }
 
+when (testBuild) {
+	import { defaultKeymap } from "../input/keymap";
+
+	test "every default binding names a command" {
+		const table = commands();
+		const missing: string[] = [];
+		for (const name of defaultKeymap().commands()) {
+			if (!table.has(name)) { missing.push(name); }
+		}
+		assert missing.length == 0;
+	}
+}
+
 function heads(e: Editor): string {
 	const parts: string[] = [];
 	for (const s of e.selections.ranges) {
@@ -719,6 +739,9 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		findBar: (replace: boolean): void => {},
 		goToLine: (): void => {},
 		findAgain: (backwards: boolean): void => {},
+		hover: (): void => {},
+		goToDefinition: (): void => {},
+		goToDiagnostic: (forward: boolean): void => {},
 	};
 	return (e: Editor, name: string): void => {
 		const command = table.get(name);

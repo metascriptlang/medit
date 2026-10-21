@@ -69,6 +69,12 @@ export class Keymap {
 	}
 
 	pendingChords(): string { return this.pending; }
+
+	commands(): string[] {
+		const out: string[] = [];
+		for (const [sequence, command] of this.bindings) { out.push(command); }
+		return out;
+	}
 }
 
 export function defaultKeymap(): Keymap {
@@ -101,6 +107,7 @@ export function defaultKeymap(): Keymap {
 		["ctrl+c", "copy"], ["ctrl+x", "cut"], ["ctrl+v", "paste"], ["ctrl+s", "save"],
 		["ctrl+f", "find"], ["ctrl+g", "goToLine"], ["ctrl+h", "replace"], ["F3", "findNext"], ["shift+F3", "findPrev"],
 		["ctrl+Insert", "copy"], ["shift+Delete", "cut"], ["shift+Insert", "paste"],
+		["ctrl+k ctrl+i", "hover"], ["F12", "goToDefinition"], ["F8", "nextDiagnostic"], ["shift+F8", "prevDiagnostic"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;
