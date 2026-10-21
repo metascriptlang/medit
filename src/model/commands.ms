@@ -293,7 +293,7 @@ function newline(e: Editor, cx: Context): void {
 			text += comment;
 			caret = text.byteLength;
 		} else if (opener >= 0) {
-			const inner = "\n" + indent + "\t";
+			const inner = "\n" + indent + e.indent;
 			const after = blankRight(doc, to);
 			const nextFrom = i + 1 < ranges.length ? ranges[i + 1].start() : doc.length();
 			from = before;
@@ -322,16 +322,16 @@ function indent(e: Editor): void {
 	const edits: Edit[] = [];
 	for (const line of touchedLines(e)) {
 		const at = e.doc.lineStart(line);
-		edits.push({ from: at, to: at, text: "\t" });
+		edits.push({ from: at, to: at, text: e.indent });
 	}
 	rewriteLines(e, edits);
 }
 
-function outdentTo(doc: Document, line: int32): int32 {
+function outdentTo(doc: Document, line: int32, width: int32): int32 {
 	const from = doc.lineStart(line);
 	const end = doc.lineEnd(line);
 	if (from < end && doc.byteAt(from) == "\t".code) { return from + 1; }
-	const limit = Math.min(end, from + OUTDENT_SPACES);
+	const limit = Math.min(end, from + width);
 	let to = from;
 	while (to < limit && doc.byteAt(to) == " ".code) { to += 1; }
 	return to;
@@ -341,7 +341,7 @@ function outdent(e: Editor, cx: Context): void {
 	const edits: Edit[] = [];
 	for (const line of touchedLines(e)) {
 		const from = e.doc.lineStart(line);
-		const to = outdentTo(e.doc, line);
+		const to = outdentTo(e.doc, line, e.indent == "\t" ? OUTDENT_SPACES : e.indent.byteLength);
 		if (to > from) { edits.push({ from, to, text: "" }); }
 	}
 	rewriteLines(e, edits);
@@ -354,7 +354,24 @@ function tab(e: Editor, cx: Context): void {
 			return;
 		}
 	}
-	insertText(e, "\t");
+	if (e.indent == "\t") {
+		insertText(e, "\t");
+		return;
+	}
+	const size = e.indent.byteLength;
+	const edits: Edit[] = [];
+	const carets: int32[] = [];
+	for (const s of e.selections.ranges) {
+		const text = " ".repeat(size - (s.start() - e.doc.lineStart(e.doc.lineOf(s.start()))) % size);
+		edits.push({ from: s.start(), to: s.end(), text });
+		carets.push(text.byteLength);
+	}
+	e.begin();
+	const applied = e.change(edits);
+	const next: Sel[] = [];
+	for (let i = 0; i < applied.length; i++) { next.push(cursorAt(applied[i].from + carets[i])); }
+	e.select({ ranges: next, primary: e.selections.primary });
+	e.end();
 }
 
 function allEmpty(e: Editor): boolean {
@@ -1683,3 +1700,25 @@ test "selection undo goes back through motions and leaves the text as it is" {
 	assert heads(e) == "3";
 	assert e.doc.text() == "oneX";
 }
+test "with a space indent, tab fills to the next stop, enter and indent add the unit, outdent takes it" {
+	const run = runner();
+	const e = editorAt("ab", [1]);
+	e.indent = "  ";
+	run(e, "tab");
+	assert e.doc.text() == "a b" && heads(e) == "2";
+	run(e, "tab");
+	assert e.doc.text() == "a   b" && heads(e) == "4";
+	const block = editorAt("if (x) {}", [8]);
+	block.indent = "    ";
+	run(block, "newline");
+	assert block.doc.text() == "if (x) {\n    \n}" && heads(block) == "13";
+	const lines = editorAt("a\n   b", [0]);
+	lines.indent = "  ";
+	lines.select({ ranges: [span(0, 6)], primary: 0 });
+	run(lines, "indent");
+	assert lines.doc.text() == "  a\n     b";
+	run(lines, "outdent");
+	run(lines, "outdent");
+	assert lines.doc.text() == "a\n b";
+}
+
