@@ -20,12 +20,13 @@ import {
 	press,
 } from "../../../../model/commands";
 import { Completer, MenuMove, Provider } from "../../../../model/completer";
-import { Completion, queryAt } from "../../../../model/completion";
+import { Completion, acceptLater, queryAt } from "../../../../model/completion";
 import { SignatureAsk, SignatureHelp, SignatureHelper, SignatureProvider } from "../../../../model/signatures";
 import { Formatter } from "../../../../model/format";
 import { Occurrence, Occurrences } from "../../../../model/occurrences";
 import { Renamer, Renaming } from "../../../../model/rename";
 import { Place, References } from "../../../../model/references";
+import { CodeAction, CodeActions } from "../../../../model/actions";
 import { Outline, OutlineItem } from "../../../../model/outline";
 import { NavHistory, Spot } from "../../../../model/history";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, listKeymap, signatureKeymap } from "../../../../input/keymap";
@@ -49,6 +50,7 @@ import { createFinder } from "../find/finder";
 import { GoToBar } from "../goto/goToBar";
 import { RenameField } from "../rename/renameField";
 import { referenceColumns, referenceRows } from "../references/referenceList";
+import { actionColumns, actionRows } from "../actions/actionList";
 import { OUTLINE_PADDING, OUTLINE_ROWS, OutlinePicker, outlineColumns, outlineRows } from "../outline/outlinePicker";
 import { HoverCard, cardOf, cardSize, placed } from "../hover/hoverCard";
 import { CompletionMenu, MENU_BORDER, MENU_ROWS, menuColumns, menuPlaced, menuRows, scrolledTop } from "../completion/completionMenu";
@@ -542,10 +544,30 @@ export function EditorPane(props: {
 	referencesChanged = (): void => {
 		if (grid.cellWidth > 0) { reveal(); }
 	};
+	const actions = new CodeActions(editor, {
+		ask: (from: int32, to: int32, done: (found: CodeAction[] | null) => void): int32 =>
+			session === null ? -1 : (session as Session).codeActions(from, to, done),
+		apply: (action: CodeAction, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 =>
+			session === null ? -1 : (session as Session).applyAction(action, done),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+	}, (message: string): void => {
+		notice = message;
+		paint();
+	}, (): void => { referencesChanged(); });
+	if (session !== null) {
+		(session as Session).applying((edits: Edit[], others: int32): string | null => {
+			if (others > 0) { return `the edit also changes ${others} other file${others == 1 ? "" : "s"}, and medic edits one file`; }
+			const skipped = acceptLater(editor, edits, doc.version(), "");
+			if (skipped > 0) { notice = `left out ${skipped} edit${skipped == 1 ? "" : "s"} from the language server that overlap another`; }
+			reveal();
+			return null;
+		});
+	}
 	placeReferences = (): void => {
 		const head = editor.selections.primaryRange().head;
+		const shown = actions.shown() || references.shown();
 		let row = -1;
-		for (let k = 0; k < (frame.length as int32) && row < 0 && references.shown(); k++) {
+		for (let k = 0; k < (frame.length as int32) && row < 0 && shown; k++) {
 			if (frame[k].holds(head)) { row = k; }
 		}
 		if (row < 0 || grid.cellWidth <= 0) {
@@ -553,15 +575,18 @@ export function EditorPane(props: {
 			return;
 		}
 		const places = references.places();
-		const total = places.length as int32;
-		const columns = referenceColumns(doc, places);
-		const x = gutterWidth(doc.lineCount()) * grid.cellWidth;
+		const offered = actions.actions();
+		const total = actions.shown() ? offered.length as int32 : places.length as int32;
+		const selected = actions.shown() ? actions.selected : references.selected;
+		const columns = actions.shown() ? actionColumns(offered) : referenceColumns(doc, places);
+		const cell = actions.shown() ? Math.max(0, cellIn(doc, frame[row], head) - view.left) : 0;
+		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
 		const place = menuPlaced(columns, Math.min(total, MENU_ROWS), x, row, view.rows, grid.rowHeight, grid.cellWidth, areaWidth, PANEL);
-		listTop = scrolledTop(listTop, references.selected, place.rows, total);
-		fill(listLines, referenceRows(doc, places, listTop, place.rows, columns));
+		listTop = scrolledTop(listTop, selected, place.rows, total);
+		fill(listLines, actions.shown() ? actionRows(offered, listTop, place.rows, columns) : referenceRows(doc, places, listTop, place.rows, columns));
 		setListPick({
 			x: 0,
-			y: (references.selected - listTop) * grid.rowHeight,
+			y: (selected - listTop) * grid.rowHeight,
 			width: place.box.width - 2 * MENU_BORDER,
 			height: grid.rowHeight,
 			color: SELECTION,
@@ -734,14 +759,30 @@ export function EditorPane(props: {
 		rename: (): void => { renamer.start(); },
 		findReferences: (): void => {
 			completer.hide();
+			actions.close();
 			references.find();
 		},
-		moveList: (move: MenuMove): void => { references.move(move); },
-		confirmList: (): void => { references.confirm(); },
-		hideList: (): void => { references.dismiss(); },
+		moveList: (move: MenuMove): void => {
+			if (actions.shown()) { actions.move(move); }
+			else { references.move(move); }
+		},
+		confirmList: (): void => {
+			if (actions.shown()) { actions.confirm(); }
+			else { references.confirm(); }
+		},
+		hideList: (): void => {
+			actions.close();
+			references.dismiss();
+		},
+		codeActions: (): void => {
+			completer.hide();
+			references.close();
+			actions.toggle();
+		},
 		outline: (): void => {
 			completer.hide();
 			references.close();
+			actions.close();
 			outline.open();
 		},
 		navigate: (back: boolean): void => {
@@ -813,12 +854,13 @@ export function EditorPane(props: {
 		hideCard();
 		notice = null;
 		const key: KeyPress = { key: e.key, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
-		if (references.shown() && keymap.pendingChords() == "") {
+		if ((actions.shown() || references.shown()) && keymap.pendingChords() == "") {
 			const m = listKeys.feed(key);
 			if (m.outcome == Outcome.Run) {
 				run(m.command);
 				return;
 			}
+			actions.close();
 			references.close();
 		}
 		outline.close();
@@ -874,6 +916,11 @@ export function EditorPane(props: {
 		if (renamed()) { renamer.cancel(); }
 		references.close();
 		outline.close();
+		if (actions.shown() && listed() && e.button == 1 && inside(listBox(), e)) {
+			actions.pick(listTop + (Math.floor((e.locationY - listBox().y - MENU_BORDER) / grid.rowHeight) as int32));
+			return;
+		}
+		actions.close();
 		if (grid.cellWidth <= 0 || e.button != 1) { return; }
 		if (overMenu(e)) {
 			completer.pick(menuTop + (Math.floor((e.locationY - menuBox().y - MENU_BORDER) / grid.rowHeight) as int32));
