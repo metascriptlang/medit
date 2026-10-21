@@ -1,4 +1,4 @@
-import { Edit } from "./document";
+import { Document, Edit } from "./document";
 import { Editor } from "./editor";
 import { acceptLater, edited } from "./completion";
 import { end, start } from "./selection";
@@ -97,9 +97,56 @@ export class Formatter {
 	}
 }
 
+function isLineBlank(b: int32): boolean { return b == " ".code || b == "\t".code; }
+
+function isAsciiSpace(b: int32): boolean {
+	return isLineBlank(b) || b == "\n".code || b == "\r".code || b == 0x0C;
+}
+
+function finalNewlineFrom(doc: Document): int32 {
+	const length = doc.length();
+	let from = length;
+	while (from > 0 && isAsciiSpace(doc.byteAt(from - 1))) { from -= 1; }
+	const settled = length == 0 || (from == length - 1 && doc.byteAt(from) == "\n".code);
+	return settled ? -1 : from;
+}
+
+export function savedEdits(doc: Document, trimTrailingWhitespace: boolean, insertFinalNewline: boolean): Edit[] {
+	const tail = insertFinalNewline ? finalNewlineFrom(doc) : -1;
+	const edits: Edit[] = [];
+	if (trimTrailingWhitespace) {
+		for (let line = 0; line < doc.lineCount(); line++) {
+			const start = doc.lineStart(line);
+			const end = doc.lineEnd(line);
+			let from = end;
+			while (from > start && isLineBlank(doc.byteAt(from - 1))) { from -= 1; }
+			if (tail >= 0 && from >= tail) { break; }
+			if (from < end) { edits.push({ from, to: end, text: "" }); }
+		}
+	}
+	if (tail >= 0) { edits.push({ from: tail, to: doc.length(), text: "\n" }); }
+	return edits;
+}
+
 when (testBuild) {
-	import { Document } from "./document";
 	import { single } from "./selection";
+
+	function saved(text: string, trim: boolean, finalNewline: boolean): string {
+		const doc = new Document(text);
+		const edits = savedEdits(doc, trim, finalNewline);
+		for (let k = edits.length - 1; k >= 0; k--) { const _undo = doc.splice(edits[k]); }
+		return doc.text();
+	}
+
+	test "a save trims spaces and tabs at line ends and ends the file with one line break" {
+		assert saved("a  \n\tb\t\n  \nc", true, false) == "a\n\tb\n\nc";
+		assert saved("a\nb", false, true) == "a\nb\n";
+		assert saved("a \n\n \n", false, true) == "a\n";
+		assert saved("a  \nb  \n\n", true, true) == "a\nb\n";
+		assert saved("a\n", true, true) == "a\n";
+		assert saved("", true, true) == "" && saved(" \n ", false, true) == "\n";
+		assert saved("a \nb ", false, false) == "a \nb ";
+	}
 
 	class Fake {
 		asks: Array<[int32, int32] | null> = [];
