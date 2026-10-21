@@ -626,6 +626,20 @@ export class Server {
 		});
 	}
 
+	references(doc: Document, offset: int32, done: (found: Target[] | null) => void): int32 {
+		if (!this.provides("referencesProvider")) { return -1; }
+		const params = withField(this.at(doc, offset), "context", "{\"includeDeclaration\":true}");
+		return this.request(doc, "textDocument/references", params, (result: JsonValue, version: int32): void => {
+			const found: Target[] = [];
+			if (present(result)) {
+				for (const l of locationsOf(result)) {
+					found.push({ uri: l.uri, range: l.range, here: l.uri == this.uri() ? this.span(doc, version, l.range) : null });
+				}
+			}
+			done(found);
+		}, (message: string): void => { done(null); });
+	}
+
 	definition(doc: Document, offset: int32, done: (found: Target[]) => void): int32 {
 		if (!this.provides("definitionProvider")) { return -1; }
 		return this.ask(doc, "textDocument/definition", offset, (result: JsonValue, version: int32): void => {
@@ -733,7 +747,7 @@ when (testBuild) {
 		server.initialize(null, 1, (e: string | null): void => {});
 		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true},"
 			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"documentFormattingProvider\":true,\"documentHighlightProvider\":true,"
-			+ "\"renameProvider\":{\"prepareProvider\":true}}}"));
+			+ "\"renameProvider\":{\"prepareProvider\":true},\"referencesProvider\":true}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		return [server, wire, d];
 	}
@@ -903,5 +917,21 @@ when (testBuild) {
 		const did = server.rename(d, 1, "cd", keep);
 		server.receive(reply(did, "{\"documentChanges\":[]}"));
 		assert error !== null;
+	}
+
+	test "references include the declaration and place this document's in it" {
+		const [server, wire, d] = completing("ab = ab;\n");
+		let found: Target[] | null = null;
+		const id = server.references(d, 1, (t: Target[] | null): void => { found = t; });
+		const sent = wire.sent[wire.sent.length - 1];
+		assert sent.includes("\"method\":\"textDocument/references\"") && sent.includes("\"includeDeclaration\":true");
+		server.receive(reply(id, "[{\"uri\":\"file:///a.ms\",\"range\":{\"start\":{\"line\":0,\"character\":5},\"end\":{\"line\":0,\"character\":7}}},"
+			+ "{\"uri\":\"file:///b.ms\",\"range\":{\"start\":{\"line\":2,\"character\":1},\"end\":{\"line\":2,\"character\":3}}}]"));
+		assert found !== null;
+		const f = found as Target[];
+		assert f.length == 2 && f[0].here !== null && (f[0].here as Span).from == 5 && f[1].here === null;
+		const nid = server.references(d, 1, (t: Target[] | null): void => { found = t; });
+		server.receive(reply(nid, "null"));
+		assert found !== null && (found as Target[]).length == 0;
 	}
 }

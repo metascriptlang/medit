@@ -3,6 +3,7 @@ import { Diagnostic, Diagnostics } from "../model/diagnostics";
 import { Completion } from "../model/completion";
 import { SignatureAsk, SignatureHelp } from "../model/signatures";
 import { Occurrence } from "../model/occurrences";
+import { Place } from "../model/references";
 import { Server, Span, Target } from "./server";
 
 export interface Link {
@@ -118,6 +119,21 @@ export class Session {
 
 	documentHighlight(offset: int32, done: (found: Occurrence[] | null) => void): int32 {
 		return this.server.documentHighlight(this.doc, offset, done);
+	}
+
+	references(offset: int32, done: (found: Place[] | null) => void): int32 {
+		return this.server.references(this.doc, offset, (found: Target[] | null): void => {
+			if (found === null) {
+				done(null);
+				return;
+			}
+			done((found as Target[]).map((t: Target): Place => ({
+				uri: t.uri,
+				line: t.range.start.line,
+				character: t.range.start.character,
+				here: t.here === null ? null : [(t.here as Span).from, (t.here as Span).to],
+			})));
+		});
 	}
 
 	prepares(): boolean { return this.server.prepares(); }
