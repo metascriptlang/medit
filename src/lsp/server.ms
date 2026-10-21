@@ -9,7 +9,7 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"general\":{\"positionEncodings\":[\"utf-16\"]},"
 	+ "\"textDocument\":{"
 	+ "\"synchronization\":{\"didSave\":true},"
-	+ "\"publishDiagnostics\":{\"versionSupport\":true},"
+	+ "\"publishDiagnostics\":{\"versionSupport\":true,\"tagSupport\":{\"valueSet\":[1,2]}},"
 	+ "\"hover\":{\"contentFormat\":[\"markdown\",\"plaintext\"]},"
 	+ "\"definition\":{\"linkSupport\":true}"
 	+ "},"
@@ -83,6 +83,15 @@ export function locationsOf(result: JsonValue): Location[] {
 		one(result);
 	}
 	return out;
+}
+
+const UNNECESSARY: int32 = 1;
+
+function tagged(tags: JsonValue, tag: int32): boolean {
+	for (let i = 0; i < tags.length(); i++) {
+		if (tags.at(i).asInt32() == tag) { return true; }
+	}
+	return false;
 }
 
 function severityOf(n: int32): Severity {
@@ -233,6 +242,7 @@ export class Server {
 				severity: severityOf(d.getDynamicField("severity").asInt32(1)),
 				message: d.getDynamicField("message").asString(),
 				source: d.getDynamicField("source").asString(),
+				unnecessary: tagged(d.getDynamicField("tags"), UNNECESSARY),
 			});
 		}
 		return out;
@@ -347,7 +357,7 @@ when (testBuild) {
 		const stale = JSON.parseValue("{\"uri\":\"file:///a.ms\",\"version\":7,\"diagnostics\":[]}");
 		assert stale.ok;
 		if (stale.ok) { assert server.diagnosticsOf(d, stale.value) === null; }
-		const params = JSON.parseValue("{\"uri\":\"file:///a.ms\",\"diagnostics\":[{\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":2}},\"severity\":2,\"message\":\"m\",\"source\":\"s\"}]}");
+		const params = JSON.parseValue("{\"uri\":\"file:///a.ms\",\"diagnostics\":[{\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":2}},\"severity\":2,\"message\":\"m\",\"source\":\"s\",\"tags\":[1]}]}");
 		assert params.ok;
 		if (params.ok) {
 			const found = server.diagnosticsOf(d, params.value);
@@ -355,6 +365,7 @@ when (testBuild) {
 			if (found !== null) {
 				assert found.length == 1;
 				assert found[0].from == 6 && found[0].to == 8 && found[0].severity == Severity.Warning;
+				assert found[0].unnecessary;
 			}
 			const other = JSON.parseValue("{\"uri\":\"file:///other\"}");
 			if (other.ok) { assert server.diagnosticsOf(d, other.value) === null; }

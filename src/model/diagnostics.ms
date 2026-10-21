@@ -1,4 +1,5 @@
 import { Anchor, Bias, Document } from "./document";
+import { nextCluster, prevCluster } from "./motion";
 
 export enum Severity {
 	Error = 1,
@@ -13,6 +14,7 @@ export struct Diagnostic {
 	severity: Severity;
 	message: string;
 	source: string;
+	unnecessary: boolean;
 }
 
 struct Held {
@@ -21,6 +23,23 @@ struct Held {
 	severity: Severity;
 	message: string;
 	source: string;
+	unnecessary: boolean;
+}
+
+function widened(doc: Document, from: int32, to: int32): [int32, int32] {
+	const line = doc.lineOf(from);
+	if (from == to) {
+		if (from < doc.lineEnd(line)) { return [from, doc.nextCluster(from)]; }
+		return from > doc.lineStart(line) ? [doc.prevCluster(from), from] : [from, to];
+	}
+	if (from == doc.lineEnd(line) && line + 1 < doc.lineCount() && to == doc.lineStart(line + 1)) {
+		return from > doc.lineStart(line) ? [doc.prevCluster(from), from] : [from, from];
+	}
+	return [from, to];
+}
+
+function same(a: Diagnostic, b: Diagnostic): boolean {
+	return a.from == b.from && a.to == b.to && a.message == b.message;
 }
 
 export struct Tally {
@@ -38,14 +57,15 @@ export class Diagnostics {
 		}
 		this.held = [];
 		for (const d of found) {
-			const from = Math.max(0, Math.min(d.from, doc.length()));
-			const to = Math.max(from, Math.min(d.to, doc.length()));
+			const clipped = Math.max(0, Math.min(d.from, doc.length()));
+			const [from, to] = widened(doc, clipped, Math.max(clipped, Math.min(d.to, doc.length())));
 			this.held.push({
 				from: doc.anchor(from, Bias.Right),
 				to: doc.anchor(to, Bias.Left),
 				severity: d.severity,
 				message: d.message,
 				source: d.source,
+				unnecessary: d.unnecessary,
 			});
 		}
 	}
@@ -54,7 +74,14 @@ export class Diagnostics {
 
 	private resolved(doc: Document, h: Held): Diagnostic {
 		const from = doc.resolve(h.from);
-		return { from, to: Math.max(from, doc.resolve(h.to)), severity: h.severity, message: h.message, source: h.source };
+		return {
+			from,
+			to: Math.max(from, doc.resolve(h.to)),
+			severity: h.severity,
+			message: h.message,
+			source: h.source,
+			unnecessary: h.unnecessary,
+		};
 	}
 
 	all(doc: Document): Diagnostic[] {
@@ -90,23 +117,35 @@ export class Diagnostics {
 		return { errors, warnings };
 	}
 
-	next(doc: Document, offset: int32, forward: boolean): Diagnostic | null {
-		let worst: int32 = Severity.Hint as int32;
-		for (const h of this.held) { worst = Math.min(worst, h.severity as int32); }
-		let step: Diagnostic | null = null;
-		let wrap: Diagnostic | null = null;
-		for (const h of this.held) {
-			if ((h.severity as int32) != worst) { continue; }
-			const d = this.resolved(doc, h);
-			const ahead = forward ? d.from > offset : d.from < offset;
-			if (ahead && (step === null || (forward ? d.from < (step as Diagnostic).from : d.from > (step as Diagnostic).from))) {
-				step = d;
-			}
-			if (wrap === null || (forward ? d.from < (wrap as Diagnostic).from : d.from > (wrap as Diagnostic).from)) {
-				wrap = d;
-			}
+	next(doc: Document, cursor: int32, forward: boolean, active: Diagnostic | null): Diagnostic | null {
+		const list = this.all(doc).filter((d: Diagnostic): boolean => d.to > d.from && !d.unnecessary);
+		list.sort((a: Diagnostic, b: Diagnostic): number => a.from - b.from);
+		const after = list.filter((d: Diagnostic): boolean => d.from >= cursor);
+		const before = list.filter((d: Diagnostic): boolean => d.from <= cursor);
+		const isActive = (d: Diagnostic): boolean => active !== null && same(d, active as Diagnostic);
+		let target: Diagnostic | null = null;
+		let onActive = false;
+		for (const d of after.concat(before)) {
+			if (!(d.from <= cursor && cursor < d.to) && d.to != cursor) { continue; }
+			if (isActive(d)) { onActive = true; } else if (target === null) { target = d; }
 		}
-		return step !== null ? step : wrap;
+		if (target !== null && !onActive) { return target; }
+		let at = -1;
+		for (let i = 0; i < (list.length as int32); i++) {
+			if (list[i].from == cursor && isActive(list[i])) { at = i; }
+		}
+		const beside = forward ? at + 1 : at - 1;
+		if (at >= 0 && beside >= 0 && beside < (list.length as int32) && list[beside].from == cursor) { return list[beside]; }
+		let order = after.concat(before);
+		if (!forward) {
+			before.reverse();
+			after.reverse();
+			order = before.concat(after);
+		}
+		for (const d of order) {
+			if (d.from != cursor) { return d; }
+		}
+		return null;
 	}
 }
 
@@ -114,8 +153,8 @@ test "diagnostics follow the text they mark as it is edited" {
 	const d = new Document("let x = 1;\nlet y = x;\n");
 	const set = new Diagnostics();
 	set.replace(d, [
-		{ from: 15, to: 16, severity: Severity.Warning, message: "unused", source: "ms" },
-		{ from: 4, to: 5, severity: Severity.Error, message: "bad", source: "ms" },
+		{ from: 15, to: 16, severity: Severity.Warning, message: "unused", source: "ms", unnecessary: false },
+		{ from: 4, to: 5, severity: Severity.Error, message: "bad", source: "ms", unnecessary: false },
 	]);
 	const _e = d.splice({ from: 0, to: 0, text: "// note\n" });
 	const all = set.all(d);
@@ -131,7 +170,7 @@ test "diagnostics follow the text they mark as it is edited" {
 test "replacing the set releases the old anchors" {
 	const d = new Document("abc");
 	const set = new Diagnostics();
-	set.replace(d, [{ from: 0, to: 9, severity: Severity.Hint, message: "m", source: "" }]);
+	set.replace(d, [{ from: 0, to: 9, severity: Severity.Hint, message: "m", source: "", unnecessary: false }]);
 	assert set.all(d)[0].to == 3;
 	set.replace(d, []);
 	assert set.count() == 0;
@@ -139,19 +178,43 @@ test "replacing the set releases the old anchors" {
 	assert a.slot <= 1;
 }
 
-test "next steps among the most severe diagnostics, wrapping at the ends" {
+function hint(from: int32, to: int32, message: string): Diagnostic {
+	return { from, to, severity: Severity.Hint, message, source: "", unnecessary: false };
+}
+
+test "next lands on the diagnostic under the cursor, then steps on, wrapping at the ends" {
 	const d = new Document("0123456789");
 	const set = new Diagnostics();
-	set.replace(d, [
-		{ from: 2, to: 3, severity: Severity.Error, message: "a", source: "" },
-		{ from: 4, to: 5, severity: Severity.Hint, message: "h", source: "" },
-		{ from: 7, to: 8, severity: Severity.Error, message: "b", source: "" },
-	]);
-	const n = set.next(d, 3, true);
-	assert n !== null && (n as Diagnostic).message == "b";
-	const w = set.next(d, 8, true);
+	set.replace(d, [hint(2, 4, "a"), hint(7, 8, "b"), { ...hint(5, 6, "faded"), unnecessary: true }]);
+	const under = set.next(d, 3, true, null);
+	assert under !== null && (under as Diagnostic).message == "a";
+	const on = set.next(d, 2, true, under);
+	assert on !== null && (on as Diagnostic).message == "b";
+	const w = set.next(d, 7, true, on);
 	assert w !== null && (w as Diagnostic).message == "a";
-	const p = set.next(d, 2, false);
+	const p = set.next(d, 2, false, w);
 	assert p !== null && (p as Diagnostic).message == "b";
-	assert new Diagnostics().next(d, 0, true) === null;
+	assert new Diagnostics().next(d, 0, true, null) === null;
+}
+
+test "diagnostics at one place are visited in turn" {
+	const d = new Document("0123456789");
+	const set = new Diagnostics();
+	set.replace(d, [hint(2, 4, "a"), hint(2, 3, "a2"), hint(6, 7, "b")]);
+	const first = set.next(d, 0, true, null);
+	assert first !== null && (first as Diagnostic).message == "a";
+	const second = set.next(d, 2, true, first);
+	assert second !== null && (second as Diagnostic).message == "a2";
+	const third = set.next(d, 2, true, second);
+	assert third !== null && (third as Diagnostic).message == "b";
+}
+
+test "an empty range widens to the character after it, or before it at a line end" {
+	const d = new Document("ab\ncd");
+	const set = new Diagnostics();
+	set.replace(d, [hint(1, 1, "mid"), hint(2, 2, "end"), hint(2, 3, "newline")]);
+	const all = set.all(d);
+	assert all[0].from == 1 && all[0].to == 2;
+	assert all[1].from == 1 && all[1].to == 2;
+	assert all[2].from == 1 && all[2].to == 2;
 }
