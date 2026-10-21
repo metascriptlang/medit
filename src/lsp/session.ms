@@ -1,5 +1,6 @@
 import { Document } from "../model/document";
 import { Diagnostic, Diagnostics } from "../model/diagnostics";
+import { Completion } from "../model/completion";
 import { Server, Span, Target } from "./server";
 
 export interface Link {
@@ -86,6 +87,16 @@ export class Session {
 	definition(offset: int32, done: (found: Target[]) => void): int32 {
 		return this.server.definition(this.doc, offset, done);
 	}
+
+	completion(offset: int32, trigger: string | null, done: (items: Completion[], incomplete: boolean) => void): int32 {
+		return this.server.completion(this.doc, offset, trigger, done);
+	}
+
+	resolveCompletion(item: Completion, done: (resolved: Completion) => void): int32 {
+		return this.server.resolve(this.doc, item, done);
+	}
+
+	completionTriggers(): string[] { return this.server.triggers("completionProvider", "triggerCharacters"); }
 
 	cancel(id: int32): void { this.server.cancel(id); }
 
