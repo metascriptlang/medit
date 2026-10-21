@@ -191,6 +191,12 @@ export class Rope {
 		this.root = rootOf(leavesOf(text, true));
 	}
 
+	copy(): Rope {
+		const kept = new Rope("");
+		kept.root = this.root;
+		return kept;
+	}
+
 	length(): int32 { return this.root.bytes; }
 	lineCount(): int32 { return this.root.breaks + 1; }
 	height(): int32 { return this.root.height; }

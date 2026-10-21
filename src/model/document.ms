@@ -26,6 +26,7 @@ export struct Point {
 
 export struct LoggedChange {
 	change: Change;
+	text: string;
 	start: Point;
 	oldEnd: Point;
 	newEnd: Point;
@@ -90,6 +91,8 @@ export class Document {
 	slice(from: int32, to: int32): string { return this.rope.slice(from, to); }
 	byteAt(offset: int32): int32 { return this.rope.byteAt(offset); }
 	text(): string { return this.rope.text(); }
+	snapshot(): Rope { return this.rope.copy(); }
+	usesCrlf(): boolean { return this.crlf; }
 
 	fileText(): string {
 		const text = this.rope.text();
@@ -113,6 +116,7 @@ export class Document {
 		if ((this.log.length as int32) == LOG_SIZE) { this.log.shift(); }
 		this.log.push({
 			change,
+			text,
 			start,
 			oldEnd: start.pointAfter(removed),
 			newEnd: start.pointAfter(text),
@@ -195,6 +199,15 @@ test "a file keeps the line ending its first break uses, and inserted CRLF becom
 	assert new Document("one line").fileText() == "one line";
 }
 
+test "a snapshot keeps the text it was taken at" {
+	const d = new Document("abc");
+	const kept = d.snapshot();
+	const _e = d.splice({ from: 1, to: 2, text: "XY" });
+	assert kept.text() == "abc" && d.text() == "aXYc";
+	kept.replace(0, 0, "z");
+	assert kept.text() == "zabc" && d.text() == "aXYc";
+}
+
 test "the log answers what changed since a version" {
 	const d = new Document("abc");
 	const _a = d.splice({ from: 0, to: 0, text: "x" });
@@ -204,6 +217,7 @@ test "the log answers what changed since a version" {
 	if (since !== null) {
 		assert since.length == 2;
 		assert since[1].change.removed == 1;
+		assert since[0].text == "x" && since[1].text == "";
 	}
 	const none = d.changesSince(2);
 	assert none !== null;
