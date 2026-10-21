@@ -7,6 +7,7 @@ import { guessIndent } from "../model/indent";
 import { Clip } from "../model/commands";
 import { Syntax, covers } from "../syntax/syntax";
 import { Link, Session } from "../lsp/session";
+import { Connection } from "../lsp/connection";
 import { BACKGROUND, PADDING } from "./theme";
 import { EditorPane } from "./components/features/editor/editorPane";
 
@@ -42,7 +43,7 @@ export function App(
 		if (link === null) {
 			serverNote = `cannot start ${server}`;
 		} else {
-			session = new Session(link as Link, server, editor.doc, c.uri, id, c.rootUri, c.processId);
+			session = new Connection(link as Link, server, c.rootUri, c.processId).open(editor.doc, c.uri, id);
 		}
 	}
 	return <Void style={{ backgroundColor: BACKGROUND, padding: PADDING }}>

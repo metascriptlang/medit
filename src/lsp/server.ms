@@ -225,17 +225,36 @@ function severityOf(n: int32): Severity {
 	return n == 1 ? Severity.Error : n == 2 ? Severity.Warning : n == 3 ? Severity.Information : Severity.Hint;
 }
 
+class Opened {
+	readonly doc: Document;
+	readonly sync: DocumentSync;
+	apply: (edits: Edit[], others: int32) => string | null;
+
+	constructor(doc: Document, sync: DocumentSync) {
+		this.doc = doc;
+		this.sync = sync;
+		this.apply = (edits: Edit[], others: int32): string | null => `nothing applies edits to ${sync.uri}`;
+	}
+}
+
 export class Server {
 	private client: Client;
 	private state: State = State.Starting;
 	private queued: Array<[string, string]> = [];
-	private sync: DocumentSync | null = null;
+	private opened: Opened[] = [];
 	private syncKind: SyncKind = SyncKind.Full;
 	private saveText: boolean = false;
 	private capabilities: JsonValue = jsonNull();
 
 	constructor(write: (bytes: string) => void, complain: (message: string) => void) {
 		this.client = new Client(write, complain);
+		this.client.answer("workspace/applyEdit", (params: JsonValue): string => {
+			let failure: string | null = null;
+			this.workspaceEdit(null, this.versions(null), params.getDynamicField("edit"), (edits: Edit[] | null, others: int32, error: string | null): void => {
+				failure = error;
+			});
+			return failure === null ? "{\"applied\":true}" : `{"applied":false,"failureReason":${quoted(failure as string)}}`;
+		});
 		this.client.answer("workspace/configuration", (params: JsonValue): string => {
 			const items = params.getDynamicField("items");
 			const nulls: string[] = [];
@@ -309,26 +328,59 @@ export class Server {
 
 	open(doc: Document, uri: string, languageId: string): void {
 		const sync = new DocumentSync(uri, languageId, doc);
-		this.sync = sync;
+		this.opened.push(new Opened(doc, sync));
 		this.send("textDocument/didOpen", sync.opened(doc));
 	}
 
-	uri(): string | null { return this.sync === null ? null : (this.sync as DocumentSync).uri; }
+	close(doc: Document): void {
+		const o = this.find(doc);
+		if (o === null) { return; }
+		this.opened = this.opened.filter((x: Opened): boolean => x !== o);
+		this.send("textDocument/didClose", (o as Opened).sync.closed());
+	}
 
-	private isMine(uri: string): boolean {
-		return this.sync !== null && sameFile(uri, (this.sync as DocumentSync).uri);
+	private find(doc: Document): Opened | null {
+		for (const o of this.opened) {
+			if (o.doc === doc) { return o; }
+		}
+		return null;
+	}
+
+	private uriOf(doc: Document): string {
+		const o = this.find(doc);
+		return o === null ? "" : (o as Opened).sync.uri;
+	}
+
+	private versions(doc: Document | null): Array<[Opened, int32]> {
+		if (doc !== null) { this.changed(doc as Document); }
+		return this.opened.map((o: Opened): [Opened, int32] => [o, o.sync.lspVersion()]);
+	}
+
+	private held(seen: Array<[Opened, int32]>, uri: string): int32 {
+		for (let i = 0; i < (seen.length as int32); i++) {
+			const o = seen[i][0];
+			if (sameFile(uri, o.sync.uri) && this.find(o.doc) === o) { return i; }
+		}
+		return -1;
+	}
+
+	private placed(seen: Array<[Opened, int32]>, uri: string, range: Range): Span | null {
+		const i = this.held(seen, uri);
+		return i < 0 ? null : this.span(seen[i][0].doc, seen[i][1], range);
 	}
 
 	changed(doc: Document): void {
-		if (this.sync === null) { return; }
-		const params = (this.sync as DocumentSync).changed(doc, this.state == State.Ready ? this.syncKind : SyncKind.Full);
+		const o = this.find(doc);
+		if (o === null) { return; }
+		const params = (o as Opened).sync.changed(doc, this.state == State.Ready ? this.syncKind : SyncKind.Full);
 		if (params !== null) { this.send("textDocument/didChange", params as string); }
 	}
 
 	saved(doc: Document): void {
-		if (this.sync === null) { return; }
+		const o = this.find(doc);
+		if (o === null) { return; }
 		this.changed(doc);
-		this.send("textDocument/didSave", (this.sync as DocumentSync).saved(doc, this.saveText));
+		this.send("textDocument/didSave", (o as Opened).sync.saved(doc, this.saveText));
 	}
 
 	shutdown(done: () => void): void {
@@ -337,7 +389,7 @@ export class Server {
 			done();
 			return;
 		}
-		if (this.sync !== null) { this.client.notify("textDocument/didClose", (this.sync as DocumentSync).closed()); }
+		for (const o of this.opened) { this.client.notify("textDocument/didClose", o.sync.closed()); }
 		const _id = this.client.request("shutdown", "null", (r: Reply): void => {
 			this.client.notify("exit", "null");
 			this.state = State.Stopped;
@@ -348,14 +400,16 @@ export class Server {
 	ended(): void { this.state = State.Stopped; }
 
 	offsetNow(doc: Document, p: Position, bias: Bias): int32 {
-		if (this.sync === null) { return 0; }
-		return (this.sync as DocumentSync).offsetNow(doc, p, bias);
+		const o = this.find(doc);
+		if (o === null) { return 0; }
+		return (o as Opened).sync.offsetNow(doc, p, bias);
 	}
 
 	// Null when the diagnostics name another document, or a version whose text is no longer kept.
 	diagnosticsOf(doc: Document, params: JsonValue): Diagnostic[] | null {
-		if (!this.isMine(params.getDynamicField("uri").asString())) { return null; }
-		const sync = this.sync as DocumentSync;
+		const o = this.find(doc);
+		if (o === null || !sameFile(params.getDynamicField("uri").asString(), (o as Opened).sync.uri)) { return null; }
+		const sync = (o as Opened).sync;
 		const v = params.getDynamicField("version");
 		const version: int32 | null = isKind(v, JsonKind.Null) ? null : v.asInt32();
 		if (version !== null && !sync.keeps(version as int32)) { return null; }
@@ -382,17 +436,17 @@ export class Server {
 
 	private at(doc: Document, offset: int32): string {
 		const params: PositionParams = {
-			textDocument: { uri: (this.sync as DocumentSync).uri },
+			textDocument: { uri: this.uriOf(doc) },
 			position: doc.positionOf(offset),
 		};
 		return JSON.stringify<PositionParams>(params);
 	}
 
 	private request(doc: Document, method: string, params: string, done: (result: JsonValue, version: int32) => void, refused: (message: string) => void): int32 {
-		if (this.state != State.Ready || this.sync === null) { return -1; }
+		const o = this.find(doc);
+		if (this.state != State.Ready || o === null) { return -1; }
 		this.changed(doc);
-		const sync = this.sync as DocumentSync;
-		const version = sync.lspVersion();
+		const version = (o as Opened).sync.lspVersion();
 		return this.client.request(method, params, (r: Reply): void => {
 			if (r.failed()) { refused(r.message); }
 			else { done(r.result, version); }
@@ -400,13 +454,13 @@ export class Server {
 	}
 
 	private ask(doc: Document, method: string, offset: int32, done: (result: JsonValue, version: int32) => void): int32 {
-		if (this.state != State.Ready || this.sync === null) { return -1; }
 		return this.request(doc, method, this.at(doc, offset), done, (message: string): void => {});
 	}
 
 	private span(doc: Document, version: int32, range: Range, first: Bias = Bias.Right, last: Bias = Bias.Left): Span | null {
-		if (this.sync === null) { return null; }
-		const sync = this.sync as DocumentSync;
+		const o = this.find(doc);
+		if (o === null) { return null; }
+		const sync = (o as Opened).sync;
 		const from = sync.offsetAt(doc, version, range.start, first);
 		const to = sync.offsetAt(doc, version, range.end, last);
 		if (from === null || to === null) { return null; }
@@ -590,7 +644,7 @@ export class Server {
 	format(doc: Document, range: Span | null, indent: string, done: (edits: Edit[] | null, error: string | null) => void): int32 {
 		const whole = range === null;
 		if (!this.provides(whole ? "documentFormattingProvider" : "documentRangeFormattingProvider")) { return -1; }
-		let params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"options":${formattingOptions(indent)}`;
+		let params = `{"textDocument":{"uri":${quoted(this.uriOf(doc))}},"options":${formattingOptions(indent)}`;
 		if (range !== null) {
 			const r: Range = { start: doc.positionOf((range as Span).from), end: doc.positionOf((range as Span).to) };
 			params += `,"range":${JSON.stringify<Range>(r)}`;
@@ -631,32 +685,53 @@ export class Server {
 	rename(doc: Document, offset: int32, name: string, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
 		if (!this.provides("renameProvider")) { return -1; }
 		const params = withField(this.at(doc, offset), "newName", quoted(name));
+		const seen = this.versions(doc);
 		return this.request(doc, "textDocument/rename", params, (result: JsonValue, version: int32): void => {
-			this.workspaceEdit(doc, version, result, done);
+			this.workspaceEdit(doc, seen, result, done);
 		}, (message: string): void => { done(null, 0, message); });
 	}
 
-	// A workspace edit's edits to this document, and how many other documents it changes.
-	private workspaceEdit(doc: Document, version: int32, edit: JsonValue, done: (edits: Edit[] | null, others: int32, error: string | null) => void): void {
+	private workspaceEdit(asked: Document | null, seen: Array<[Opened, int32]>, edit: JsonValue, done: (edits: Edit[] | null, others: int32, error: string | null) => void): void {
 		if (present(edit.getDynamicField("documentChanges"))) {
 			done(null, 0, "the answer edits through documentChanges, which medic does not ask for");
 			return;
 		}
-		const uri = (this.sync as DocumentSync).uri;
 		const changes = edit.getDynamicField("changes");
-		let mine: JsonValue = jsonNull();
+		let mine: Edit[] = [];
 		let others = 0;
+		const handed: Array<[Opened, Edit[]]> = [];
 		const keys: string[] = match (changes.kind) {
 			JsonKind.Object => changes.keys,
 			_ => [],
 		};
 		for (const key of keys) {
-			if (sameFile(key, uri)) { mine = changes.getDynamicField(key); }
-			else if (changes.getDynamicField(key).length() > 0) { others += 1; }
+			const list = changes.getDynamicField(key);
+			const i = this.held(seen, key);
+			if (i < 0) {
+				if (list.length() > 0) { others += 1; }
+				continue;
+			}
+			const o = seen[i][0];
+			const edits = this.edits(o.doc, seen[i][1], list);
+			if (edits === null) {
+				done(null, 0, "the answer names text no longer kept");
+				return;
+			}
+			if (o.doc === asked) { mine = edits as Edit[]; }
+			else if ((edits as Edit[]).length > 0) { handed.push([o, edits as Edit[]]); }
 		}
-		const edits = this.edits(doc, version, mine);
-		if (edits === null) { done(null, 0, "the answer names text no longer kept"); }
-		else { done(edits as Edit[], others, null); }
+		if (asked === null && handed.length == 0 && others > 0) {
+			done(null, 0, `the edit changes ${others} file${others == 1 ? "" : "s"} that ${others == 1 ? "is" : "are"} not open`);
+			return;
+		}
+		for (const [o, edits] of handed) {
+			const refused = o.apply(edits, others);
+			if (refused !== null) {
+				done(null, 0, refused as string);
+				return;
+			}
+		}
+		done(mine, others, null);
 	}
 
 	// A diagnostic as the server sent it, its range as the document is now.
@@ -681,7 +756,7 @@ export class Server {
 		if (!this.provides("codeActionProvider")) { return -1; }
 		const r: Range = { start: doc.positionOf(from), end: doc.positionOf(to) };
 		const context = diagnostics.map((d: Diagnostic): string => this.diagnosticText(doc, d)).join(",");
-		const params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"range":${JSON.stringify<Range>(r)},`
+		const params = `{"textDocument":{"uri":${quoted(this.uriOf(doc))}},"range":${JSON.stringify<Range>(r)},`
 			+ `"context":{"diagnostics":[${context}],"triggerKind":${INVOKED}}}`;
 		return this.request(doc, "textDocument/codeAction", params, (result: JsonValue, version: int32): void => {
 			const found: CodeAction[] = [];
@@ -703,25 +778,25 @@ export class Server {
 	// Applies an action: resolves its edit when the server leaves that for later, then gives its
 	// edit, or else runs its command, whose edits come back through workspace/applyEdit.
 	applyAction(doc: Document, action: CodeAction, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
-		if (this.state != State.Ready || this.sync === null) { return -1; }
+		if (this.state != State.Ready || this.find(doc) === null) { return -1; }
 		const parsed = JSON.parseValue(action.raw);
 		if (!parsed.ok) { return -1; }
 		const a = parsed.value;
 		const resolvable = this.capabilities.getDynamicField("codeActionProvider").getDynamicField("resolveProvider").asBoolean(false);
 		const bare = isKind(a.getDynamicField("command"), JsonKind.String);
+		const seen = this.versions(doc);
 		if (!bare && resolvable && present(a.getDynamicField("data")) && !present(a.getDynamicField("edit"))) {
 			return this.request(doc, "codeAction/resolve", action.raw, (result: JsonValue, version: int32): void => {
-				this.applied(doc, version, result, done);
+				this.applied(doc, seen, result, done);
 			}, (message: string): void => { done(null, 0, message); });
 		}
-		this.changed(doc);
-		return this.applied(doc, (this.sync as DocumentSync).lspVersion(), a, done);
+		return this.applied(doc, seen, a, done);
 	}
 
-	private applied(doc: Document, version: int32, a: JsonValue, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
+	private applied(doc: Document, seen: Array<[Opened, int32]>, a: JsonValue, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
 		const edit = a.getDynamicField("edit");
 		if (present(edit.getDynamicField("changes")) || present(edit.getDynamicField("documentChanges"))) {
-			this.workspaceEdit(doc, version, edit, done);
+			this.workspaceEdit(doc, seen, edit, done);
 			return 0;
 		}
 		const command = isKind(a.getDynamicField("command"), JsonKind.String) ? a : a.getDynamicField("command");
@@ -741,26 +816,25 @@ export class Server {
 		}, (message: string): void => { done(null, 0, message); });
 	}
 
-	// Answers the server's own requests to edit: `apply` gets the edits to this document and
-	// how many others they change, and gives back why it did not apply them, or null.
+	// Who applies the edits a workspace edit makes to this open document, other than the one a
+	// request asked about: `apply` gets them and how many files that are not open the edit
+	// changes, and gives back why it did not apply them, or null.
 	applyEdits(doc: Document, apply: (edits: Edit[], others: int32) => string | null): void {
-		this.client.answer("workspace/applyEdit", (params: JsonValue): string => {
-			let failure: string | null = "no document is open";
-			if (this.sync !== null) {
-				this.workspaceEdit(doc, (this.sync as DocumentSync).lspVersion(), params.getDynamicField("edit"), (edits: Edit[] | null, others: int32, error: string | null): void => {
-					failure = error !== null ? error : apply(edits as Edit[], others);
-				});
-			}
-			return failure === null ? "{\"applied\":true}" : `{"applied":false,"failureReason":${quoted(failure as string)}}`;
-		});
+		const o = this.find(doc);
+		if (o !== null) { (o as Opened).apply = apply; }
 	}
 
 	inlayHints(doc: Document, from: int32, to: int32, done: (found: Inlay[] | null) => void): int32 {
 		if (!this.provides("inlayHintProvider")) { return -1; }
 		const r: Range = { start: doc.positionOf(from), end: doc.positionOf(to) };
-		const params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"range":${JSON.stringify<Range>(r)}}`;
+		const params = `{"textDocument":{"uri":${quoted(this.uriOf(doc))}},"range":${JSON.stringify<Range>(r)}}`;
 		return this.request(doc, "textDocument/inlayHint", params, (result: JsonValue, version: int32): void => {
-			const sync = this.sync as DocumentSync;
+			const o = this.find(doc);
+			if (o === null) {
+				done(null);
+				return;
+			}
+			const sync = (o as Opened).sync;
 			const found: Inlay[] = [];
 			for (let i = 0; i < result.length(); i++) {
 				const h = result.at(i);
@@ -797,11 +871,12 @@ export class Server {
 	references(doc: Document, offset: int32, done: (found: Target[] | null) => void): int32 {
 		if (!this.provides("referencesProvider")) { return -1; }
 		const params = withField(this.at(doc, offset), "context", "{\"includeDeclaration\":true}");
+		const seen = this.versions(doc);
 		return this.request(doc, "textDocument/references", params, (result: JsonValue, version: int32): void => {
 			const found: Target[] = [];
 			if (present(result)) {
 				for (const l of locationsOf(result)) {
-					found.push({ uri: l.uri, range: l.range, here: this.isMine(l.uri) ? this.span(doc, version, l.range) : null });
+					found.push({ uri: l.uri, range: l.range, here: this.placed(seen, l.uri, l.range) });
 				}
 			}
 			done(found);
@@ -810,7 +885,7 @@ export class Server {
 
 	documentSymbols(doc: Document, done: (found: OutlineItem[] | null) => void): int32 {
 		if (!this.provides("documentSymbolProvider")) { return -1; }
-		const params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}}}`;
+		const params = `{"textDocument":{"uri":${quoted(this.uriOf(doc))}}}`;
 		return this.request(doc, "textDocument/documentSymbol", params, (result: JsonValue, version: int32): void => {
 			const found: OutlineItem[] = [];
 			let flat = false;
@@ -819,7 +894,7 @@ export class Server {
 					const s = list.at(i);
 					const location = s.getDynamicField("location");
 					flat = flat || present(location);
-					if (present(location) && !this.isMine(location.getDynamicField("uri").asString())) { continue; }
+					if (present(location) && !sameFile(location.getDynamicField("uri").asString(), this.uriOf(doc))) { continue; }
 					const span = this.span(doc, version, rangeOf(present(location) ? location.getDynamicField("range") : s.getDynamicField("range")));
 					if (span === null) { return false; }
 					found.push({
@@ -844,11 +919,12 @@ export class Server {
 
 	definition(doc: Document, offset: int32, done: (found: Target[]) => void): int32 {
 		if (!this.provides("definitionProvider")) { return -1; }
+		const seen = this.versions(doc);
 		return this.ask(doc, "textDocument/definition", offset, (result: JsonValue, version: int32): void => {
 			const found: Target[] = [];
 			if (result.kind != JsonKind.Null) {
 				for (const l of locationsOf(result)) {
-					found.push({ uri: l.uri, range: l.range, here: this.isMine(l.uri) ? this.span(doc, version, l.range) : null });
+					found.push({ uri: l.uri, range: l.range, here: this.placed(seen, l.uri, l.range) });
 				}
 			}
 			done(found);
