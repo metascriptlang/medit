@@ -110,7 +110,7 @@ export function defaultKeymap(): Keymap {
 		["ctrl+k ctrl+i", "hover"], ["F12", "goToDefinition"], ["F8", "nextDiagnostic"], ["shift+F8", "prevDiagnostic"],
 		["ctrl+Space", "showCompletions"], ["ctrl+i", "showSignatureHelp"], ["ctrl+shift+Space", "showSignatureHelp"],
 		["alt+shift+f", "format"], ["ctrl+k ctrl+f", "formatSelections"],
-		["F2", "rename"],
+		["F2", "rename"], ["shift+F12", "findReferences"], ["alt+shift+F12", "findReferences"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;
@@ -125,6 +125,18 @@ export function completionKeymap(): Keymap {
 		["PageUp", "completionFirst"], ["PageDown", "completionLast"],
 		["Enter", "confirmCompletion"], ["NumpadEnter", "confirmCompletion"], ["Tab", "confirmCompletion"],
 		["shift+Enter", "confirmCompletionReplace"], ["Escape", "hideCompletions"],
+	];
+	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
+	return keymap;
+}
+
+// Keys that act on the reference list while it shows.
+export function referencesKeymap(): Keymap {
+	const keymap = new Keymap();
+	const bindings: Array<[string, string]> = [
+		["ArrowUp", "referencePrevious"], ["ArrowDown", "referenceNext"],
+		["PageUp", "referenceFirst"], ["PageDown", "referenceLast"],
+		["Enter", "confirmReference"], ["NumpadEnter", "confirmReference"], ["Escape", "hideReferences"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;

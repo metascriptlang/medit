@@ -46,6 +46,10 @@ export interface Context {
 	hideSignatureHelp: () => void;
 	format: (selections: boolean) => void;
 	rename: () => void;
+	findReferences: () => void;
+	moveReference: (move: MenuMove) => void;
+	confirmReference: () => void;
+	hideReferences: () => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -672,6 +676,13 @@ export function commands(): Map<string, Command> {
 	table.set("format", (e: Editor, cx: Context): void => { cx.format(false); });
 	table.set("formatSelections", (e: Editor, cx: Context): void => { cx.format(true); });
 	table.set("rename", (e: Editor, cx: Context): void => { cx.rename(); });
+	table.set("findReferences", (e: Editor, cx: Context): void => { cx.findReferences(); });
+	table.set("referencePrevious", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.Previous); });
+	table.set("referenceNext", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.Next); });
+	table.set("referenceFirst", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.First); });
+	table.set("referenceLast", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.Last); });
+	table.set("confirmReference", (e: Editor, cx: Context): void => { cx.confirmReference(); });
+	table.set("hideReferences", (e: Editor, cx: Context): void => { cx.hideReferences(); });
 	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -776,6 +787,10 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		hideSignatureHelp: (): void => {},
 		format: (selections: boolean): void => {},
 		rename: (): void => {},
+		findReferences: (): void => {},
+		moveReference: (move: MenuMove): void => {},
+		confirmReference: (): void => {},
+		hideReferences: (): void => {},
 	};
 	return (e: Editor, name: string): void => {
 		const command = table.get(name);
