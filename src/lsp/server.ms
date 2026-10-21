@@ -1,9 +1,10 @@
 import { Document, Edit, Bias } from "../model/document";
 import { Diagnostic, Severity } from "../model/diagnostics";
 import { Completion, snippetText, wordAround } from "../model/completion";
+import { Parameter, Signature, SignatureAsk, SignatureHelp } from "../model/signatures";
 import { Client, NotificationHandler, Reply, failed, quoted } from "./client";
 import { DocumentSync, SyncKind } from "./sync";
-import { Position, Range, positionOf } from "./position";
+import { Position, Range, byteColumn, positionOf } from "./position";
 import { isKind } from "./json";
 
 const CLIENT_CAPABILITIES = "{"
@@ -18,7 +19,9 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"documentationFormat\":[\"markdown\",\"plaintext\"],\"deprecatedSupport\":true,"
 	+ "\"tagSupport\":{\"valueSet\":[1]}},"
 	+ "\"contextSupport\":true,"
-	+ "\"completionList\":{\"itemDefaults\":[\"editRange\",\"insertTextFormat\",\"data\"]}}"
+	+ "\"completionList\":{\"itemDefaults\":[\"editRange\",\"insertTextFormat\",\"data\"]}},"
+	+ "\"signatureHelp\":{\"signatureInformation\":{\"documentationFormat\":[\"markdown\",\"plaintext\"],"
+	+ "\"parameterInformation\":{\"labelOffsetSupport\":true},\"activeParameterSupport\":true},\"contextSupport\":true}"
 	+ "},"
 	+ "\"workspace\":{\"configuration\":true},"
 	+ "\"window\":{\"workDoneProgress\":false,\"showMessage\":{}}"
@@ -114,6 +117,39 @@ function present(v: JsonValue): boolean { return !isKind(v, JsonKind.Null); }
 // A JSON object's text with one more field; `object` is the text of a non-empty object.
 function withField(object: string, name: string, value: string): string {
 	return object.byteSlice(0, (object.byteLength as int32) - 1) + `,${quoted(name)}:${value}}`;
+}
+
+// A parameter's label is either its text, found in the signature's label, or a UTF-16 range of it.
+function parameterOf(label: string, p: JsonValue): Parameter {
+	const l = p.getDynamicField("label");
+	const doc = p.getDynamicField("documentation");
+	const documentation = present(doc) ? documentationOf(doc) : "";
+	if (isKind(l, JsonKind.Array) && l.length() == 2) {
+		const a = l.at(0).asInt32(-1);
+		const b = l.at(1).asInt32(-1);
+		if (a < 0 || a >= b) { return { from: -1, to: -1, documentation }; }
+		return { from: byteColumn(label, a), to: byteColumn(label, b), documentation };
+	}
+	const text = l.asString();
+	const at = text.byteLength == 0 ? -1 : label.indexOf(text);
+	if (at < 0) { return { from: -1, to: -1, documentation }; }
+	const from = byteColumn(label, at as int32);
+	return { from, to: from + (text.byteLength as int32), documentation };
+}
+
+function signatureOf(v: JsonValue, shared: JsonValue): Signature {
+	const label = v.getDynamicField("label").asString();
+	const list = v.getDynamicField("parameters");
+	const parameters: Parameter[] = [];
+	for (let i = 0; i < list.length(); i++) { parameters.push(parameterOf(label, list.at(i))); }
+	const own = v.getDynamicField("activeParameter");
+	const doc = v.getDynamicField("documentation");
+	return {
+		label,
+		documentation: present(doc) ? documentationOf(doc) : "",
+		parameters,
+		active: present(own) ? own.asInt32(0) : shared.asInt32(0),
+	};
 }
 
 export function documentationOf(v: JsonValue): string {
@@ -456,6 +492,30 @@ export class Server {
 		return id;
 	}
 
+	// The signatures of the call around the offset, with the one shown before sent back on a
+	// retrigger so the server can keep it; `done` gets null when there are none.
+	signatureHelp(doc: Document, q: SignatureAsk, done: (help: SignatureHelp | null) => void): int32 {
+		if (!this.provides("signatureHelpProvider")) { return -1; }
+		let context = `{"triggerKind":${q.trigger as int32},"isRetrigger":${q.shown !== null ? "true" : "false"}`;
+		if (q.character !== null) { context += `,"triggerCharacter":${quoted(q.character as string)}`; }
+		if (q.shown !== null) {
+			const shown = q.shown as SignatureHelp;
+			context += `,"activeSignatureHelp":{"signatures":${shown.raw},"activeSignature":${shown.active}}`;
+		}
+		const params = withField(this.at(doc, q.offset), "context", context + "}");
+		return this.request(doc, "textDocument/signatureHelp", params, (result: JsonValue, version: int32): void => {
+			const list = result.getDynamicField("signatures");
+			if (!present(result) || list.length() == 0) {
+				done(null);
+				return;
+			}
+			const shared = result.getDynamicField("activeParameter");
+			const signatures: Signature[] = [];
+			for (let i = 0; i < list.length(); i++) { signatures.push(signatureOf(list.at(i), shared)); }
+			done({ signatures, active: result.getDynamicField("activeSignature").asInt32(0), raw: stringify(list) });
+		}, (): void => { done(null); });
+	}
+
 	cancel(id: int32): void { if (id > 0) { this.client.cancel(id); } }
 
 	hover(doc: Document, offset: int32, done: (text: string, over: Span | null) => void): int32 {
@@ -487,6 +547,7 @@ export class Server {
 
 when (testBuild) {
 	import { framed } from "./rpc";
+	import { SignatureTrigger } from "../model/signatures";
 
 	struct Wire {
 		sent: string[];
@@ -575,7 +636,8 @@ when (testBuild) {
 		const [server, wire] = started();
 		const d = new Document(text);
 		server.initialize(null, 1, (e: string | null): void => {});
-		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true}}}"));
+		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true},"
+			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		return [server, wire, d];
 	}
@@ -641,5 +703,31 @@ when (testBuild) {
 		const rid = server.resolve(d, item as Completion, (c: Completion): void => { settled = c.resolved && c.detail == "d"; });
 		server.receive(framed(`{"jsonrpc":"2.0","id":${rid},"error":{"code":-32603,"message":"no"}}`));
 		assert settled;
+	}
+
+	test "signature help finds parameters by text or UTF-16 range and sends the shown help back on a retrigger" {
+		const [server, wire, d] = completing("f(1, ");
+		let got: SignatureHelp | null = null;
+		const ask: SignatureAsk = { offset: 5, trigger: SignatureTrigger.Character, character: ",", shown: null };
+		const id = server.signatureHelp(d, ask, (h: SignatureHelp | null): void => { got = h; });
+		assert wire.sent[wire.sent.length - 1].includes("\"context\":{\"triggerKind\":2,\"isRetrigger\":false,\"triggerCharacter\":\",\"}}");
+		server.receive(reply(id, "{\"activeSignature\":1,\"activeParameter\":1,\"signatures\":["
+			+ "{\"label\":\"f(é: int32, b: string)\",\"parameters\":[{\"label\":[2,10]},{\"label\":\"b: string\",\"documentation\":\"the b\"}]},"
+			+ "{\"label\":\"f(x)\",\"activeParameter\":0,\"documentation\":{\"kind\":\"markdown\",\"value\":\"**f**\"},\"parameters\":[{\"label\":\"y\"}]}]}"));
+		assert got !== null;
+		const h = got as SignatureHelp;
+		assert h.active == 1 && h.signatures.length == 2;
+		const first = h.signatures[0];
+		assert first.active == 1 && first.parameters[0].from == 2 && first.parameters[0].to == 11;
+		assert first.parameters[1].from == 13 && first.parameters[1].to == 22 && first.parameters[1].documentation == "the b";
+		const second = h.signatures[1];
+		assert second.active == 0 && second.documentation == "**f**" && second.parameters[0].from == -1;
+		const _again = server.signatureHelp(d, { ...ask, trigger: SignatureTrigger.ContentChange, character: null, shown: { ...h, active: 0 } }, (x: SignatureHelp | null): void => {});
+		const sent = wire.sent[wire.sent.length - 1];
+		assert sent.includes("\"isRetrigger\":true,\"activeSignatureHelp\":{\"signatures\":[{\"label\":\"f(") && sent.includes("\"activeSignature\":0}}");
+		let none = true;
+		const nid = server.signatureHelp(d, ask, (x: SignatureHelp | null): void => { none = x === null; });
+		server.receive(reply(nid, "null"));
+		assert none;
 	}
 }
