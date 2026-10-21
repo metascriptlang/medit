@@ -82,6 +82,17 @@ export function filePath(uri: string): string | null {
 		path.byteSlice(1, path.byteLength) : path;
 }
 
+function driveFolded(path: string): string {
+	return hasDrive(path) ? path.byteSlice(0, 1).toLowerCase() + path.byteSlice(1, path.byteLength) : path;
+}
+
+export function sameFile(a: string, b: string): boolean {
+	if (a == b) { return true; }
+	const pathA = filePath(a);
+	const pathB = filePath(b);
+	return pathA !== null && pathB !== null && driveFolded(pathA as string) == driveFolded(pathB as string);
+}
+
 test "a file path becomes a file URI with reserved bytes escaped, and comes back" {
 	assert fileUri("C:/Users/me/a b.ms") == "file:///C:/Users/me/a%20b.ms";
 	assert fileUri("C:\\work\\x#1.ms") == "file:///C:/work/x%231.ms";
@@ -90,4 +101,12 @@ test "a file path becomes a file URI with reserved bytes escaped, and comes back
 	assert filePath("file:///c%3A/x.ms") == "c:/x.ms";
 	assert filePath("file:///home/me/%C3%A9.ms") == "/home/me/é.ms";
 	assert filePath("untitled:1") === null;
+}
+
+test "two spellings of one file URI name the same file, two files do not" {
+	assert sameFile("file:///C:/work/a%20b.ms", "file:///c%3A/work/a%20b.ms");
+	assert sameFile("file:///C:/work/a b.ms", "file:///c:/work/a%20b.ms");
+	assert !sameFile("file:///C:/work/a.ms", "file:///C:/work/A.ms");
+	assert !sameFile("file:///C:/work/a.ms", "file:///D:/work/a.ms");
+	assert sameFile("untitled:1", "untitled:1") && !sameFile("untitled:1", "untitled:2");
 }

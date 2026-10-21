@@ -10,6 +10,7 @@ import { Client, NotificationHandler, Reply, failed, quoted } from "./client";
 import { DocumentSync, SyncKind } from "./sync";
 import { Position, Range, byteColumn, positionOf } from "./position";
 import { isKind } from "./json";
+import { sameFile } from "./uri";
 import { TAB_SIZE } from "../text/clusters";
 
 const CLIENT_CAPABILITIES = "{"
@@ -299,6 +300,10 @@ export class Server {
 
 	uri(): string | null { return this.sync === null ? null : (this.sync as DocumentSync).uri; }
 
+	private isMine(uri: string): boolean {
+		return this.sync !== null && sameFile(uri, (this.sync as DocumentSync).uri);
+	}
+
 	changed(doc: Document): void {
 		if (this.sync === null) { return; }
 		const params = (this.sync as DocumentSync).changed(doc, this.state == State.Ready ? this.syncKind : SyncKind.Full);
@@ -334,7 +339,7 @@ export class Server {
 
 	// Null when the diagnostics name another document, or a version whose text is no longer kept.
 	diagnosticsOf(doc: Document, params: JsonValue): Diagnostic[] | null {
-		if (this.sync === null || params.getDynamicField("uri").asString() != (this.sync as DocumentSync).uri) { return null; }
+		if (!this.isMine(params.getDynamicField("uri").asString())) { return null; }
 		const sync = this.sync as DocumentSync;
 		const v = params.getDynamicField("version");
 		const version: int32 | null = isKind(v, JsonKind.Null) ? null : v.asInt32();
@@ -630,7 +635,7 @@ export class Server {
 			_ => [],
 		};
 		for (const key of keys) {
-			if (key == uri) { mine = changes.getDynamicField(key); }
+			if (sameFile(key, uri)) { mine = changes.getDynamicField(key); }
 			else if (changes.getDynamicField(key).length() > 0) { others += 1; }
 		}
 		const edits = this.edits(doc, version, mine);
@@ -754,7 +759,7 @@ export class Server {
 			const found: Target[] = [];
 			if (present(result)) {
 				for (const l of locationsOf(result)) {
-					found.push({ uri: l.uri, range: l.range, here: l.uri == this.uri() ? this.span(doc, version, l.range) : null });
+					found.push({ uri: l.uri, range: l.range, here: this.isMine(l.uri) ? this.span(doc, version, l.range) : null });
 				}
 			}
 			done(found);
@@ -772,7 +777,7 @@ export class Server {
 					const s = list.at(i);
 					const location = s.getDynamicField("location");
 					flat = flat || present(location);
-					if (present(location) && location.getDynamicField("uri").asString() != this.uri()) { continue; }
+					if (present(location) && !this.isMine(location.getDynamicField("uri").asString())) { continue; }
 					const span = this.span(doc, version, rangeOf(present(location) ? location.getDynamicField("range") : s.getDynamicField("range")));
 					if (span === null) { return false; }
 					found.push({
@@ -801,7 +806,7 @@ export class Server {
 			const found: Target[] = [];
 			if (result.kind != JsonKind.Null) {
 				for (const l of locationsOf(result)) {
-					found.push({ uri: l.uri, range: l.range, here: l.uri == this.uri() ? this.span(doc, version, l.range) : null });
+					found.push({ uri: l.uri, range: l.range, here: this.isMine(l.uri) ? this.span(doc, version, l.range) : null });
 				}
 			}
 			done(found);
