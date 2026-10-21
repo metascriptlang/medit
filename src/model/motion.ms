@@ -89,6 +89,45 @@ export function wordLeft(this doc: Document, offset: int32): int32 {
 	return run == CharClass.Newline ? at : doc.skipLeft(at, run);
 }
 
+function kindOf(code: int32): CharClass {
+	const c = classOf(code);
+	return c == CharClass.Newline ? CharClass.Space : c;
+}
+
+function isLower(code: int32): boolean { return code >= "a".code && code <= "z".code; }
+function isUpper(code: int32): boolean { return code >= "A".code && code <= "Z".code; }
+
+function isSubwordSeam(left: int32, right: int32): boolean {
+	const underscore = "_".code;
+	return (left == underscore) != (right == underscore) || (isLower(left) && isUpper(right)) ||
+		left == NEWLINE || right == NEWLINE;
+}
+
+function startsSubword(left: int32, right: int32): boolean {
+	return (kindOf(left) != kindOf(right) && kindOf(right) != CharClass.Space) ||
+		isSubwordSeam(left, right);
+}
+
+function endsSubword(left: int32, right: int32): boolean {
+	return (kindOf(left) != kindOf(right) && kindOf(left) != CharClass.Space) ||
+		isSubwordSeam(left, right);
+}
+
+export function subwordLeft(this doc: Document, offset: int32): int32 {
+	if (offset <= 0) { return 0; }
+	let at = offset - 1;
+	while (at > 0 && !startsSubword(doc.byteAt(at - 1), doc.byteAt(at))) { at -= 1; }
+	return at;
+}
+
+export function subwordRight(this doc: Document, offset: int32): int32 {
+	const n = doc.length();
+	if (offset >= n) { return n; }
+	let at = offset + 1;
+	while (at < n && !endsSubword(doc.byteAt(at - 1), doc.byteAt(at))) { at += 1; }
+	return at;
+}
+
 export function wordAt(this doc: Document, offset: int32): [int32, int32] {
 	const probe = doc.classAt(offset) == CharClass.Newline ? offset - 1 : offset;
 	const run = doc.classAt(probe);
@@ -159,6 +198,37 @@ test "word motion stops at word, punctuation and line edges" {
 	assert d.wordLeft(16) == 15;
 	assert d.wordLeft(3) == 0;
 	assert d.wordLeft(0) == 0;
+}
+
+test "subword motion stops at case changes, underscores, punctuation and line edges" {
+	const d = new Document("getHTTPValue snake_case  x.y\nnext");
+	assert d.subwordRight(0) == 3;
+	assert d.subwordRight(3) == 12;
+	assert d.subwordRight(12) == 18;
+	assert d.subwordRight(18) == 19;
+	assert d.subwordRight(19) == 23;
+	assert d.subwordRight(23) == 26;
+	assert d.subwordRight(26) == 27;
+	assert d.subwordRight(28) == 29;
+	assert d.subwordRight(29) == 33;
+	assert d.subwordRight(33) == 33;
+	assert d.subwordLeft(33) == 29;
+	assert d.subwordLeft(29) == 28;
+	assert d.subwordLeft(26) == 25;
+	assert d.subwordLeft(25) == 19;
+	assert d.subwordLeft(19) == 18;
+	assert d.subwordLeft(18) == 13;
+	assert d.subwordLeft(12) == 3;
+	assert d.subwordLeft(3) == 0;
+	assert d.subwordLeft(0) == 0;
+}
+
+test "a subword never splits a multi-byte character" {
+	const d = new Document("điệnB😀");
+	assert d.subwordRight(0) == 7;
+	assert d.subwordRight(7) == 12;
+	assert d.subwordLeft(12) == 7;
+	assert d.subwordLeft(7) == 0;
 }
 
 test "the word at an offset" {
