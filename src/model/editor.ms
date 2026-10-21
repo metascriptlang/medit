@@ -49,6 +49,8 @@ export class Editor {
 	blockComment: BlockComment | null = null;
 	docComment: DocComment | null = null;
 	indent: string = "\t";
+	trimOnSave: boolean = true;
+	finalNewlineOnSave: boolean = true;
 	private autoclosed: Autoclosed[] = [];
 	wordwiseNext: Selections | null = null;
 	private undos: Vec<Step> = [];

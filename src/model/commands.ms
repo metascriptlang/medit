@@ -22,6 +22,8 @@ import { MenuMove } from "./completer";
 import { Expander } from "./expand";
 import { Folds, lineAfter, shownEnd, shownLine } from "./folds";
 import { BlockComment, DocComment } from "./language";
+import { acceptLater } from "./completion";
+import { savedEdits } from "./format";
 import {
 	WordCase,
 	oppositeCase,
@@ -1115,6 +1117,7 @@ export function commands(): Map<string, Command> {
 	table.set("toggleFold", (e: Editor, cx: Context): void => { const _toggled = cx.folds.toggleFold(e); });
 	for (let level = 1; level <= 9; level++) { table.set(`foldAtLevel${level}`, foldingTo(level)); }
 	table.set("save", (e: Editor, cx: Context): void => {
+		const _skipped = acceptLater(e, savedEdits(e.doc, e.trimOnSave, e.finalNewlineOnSave), e.doc.version(), "");
 		if (cx.save(e.doc.fileText()) === null) { e.markSaved(); }
 	});
 	table.set("find", (e: Editor, cx: Context): void => { cx.findBar(false); });
@@ -1556,7 +1559,29 @@ test "save hands over the file text with the line ending the file had" {
 	run(e, "newline");
 	run(e, "save");
 	assert saved.length == 1;
-	assert saved[0] == "a\r\n\r\nb";
+	assert saved[0] == "a\r\n\r\nb\r\n";
+}
+
+test "a save trims trailing whitespace and ends the file with one newline, undone in one step" {
+	const saved: string[] = [];
+	const run = runner(saved);
+	const e = editorAt("a  \nb\t\n\n\n", [1]);
+	run(e, "save");
+	assert saved[0] == "a\nb\n";
+	assert e.doc.text() == "a\nb\n";
+	assert heads(e) == "1";
+	assert !e.isDirty();
+	run(e, "undo");
+	assert e.doc.text() == "a  \nb\t\n\n\n";
+}
+
+test "a save with the save-time edits turned off writes the text as it is" {
+	const saved: string[] = [];
+	const e = editorAt("a  \nb", [1]);
+	e.trimOnSave = false;
+	e.finalNewlineOnSave = false;
+	runner(saved)(e, "save");
+	assert saved[0] == "a  \nb";
 }
 
 test "a save leaves the editor clean only when the file was written" {
