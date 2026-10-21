@@ -2,6 +2,8 @@ import { Rope } from "../text/rope";
 import { Bias, Document, mapOffset } from "../model/document";
 import { Position, Range, offsetIn, offsetOf, positionIn } from "./position";
 
+const KEPT_VERSIONS: int32 = 10;
+
 export enum SyncKind {
 	None = 0,
 	Full = 1,
@@ -60,6 +62,20 @@ struct DidClose {
 	textDocument: DocumentId;
 }
 
+struct Sent {
+	version: int32;
+	text: Rope;
+	at: int32;
+}
+
+function mapped(doc: Document, text: Rope, at: int32, p: Position, bias: Bias): int32 | null {
+	const logged = doc.changesSince(at);
+	if (logged === null) { return null; }
+	let offset = offsetIn(text, p);
+	for (const c of logged) { offset = mapOffset(offset, c.change, bias); }
+	return offset;
+}
+
 export class DocumentSync {
 	readonly uri: string;
 	private languageId: string;
@@ -67,6 +83,7 @@ export class DocumentSync {
 	private version: int32 = 0;
 	private sentAt: int32 = 0;
 	private shadow: Rope;
+	private kept: Sent[] = [];
 
 	constructor(uri: string, languageId: string, doc: Document) {
 		this.uri = uri;
@@ -78,6 +95,11 @@ export class DocumentSync {
 
 	lspVersion(): int32 { return this.version; }
 
+	private keep(): void {
+		this.kept.push({ version: this.version, text: this.shadow.copy(), at: this.sentAt });
+		if ((this.kept.length as int32) > KEPT_VERSIONS) { this.kept.shift(); }
+	}
+
 	private wire(text: string): string {
 		return this.crlf ? text.replaceAll("\n", "\r\n") : text;
 	}
@@ -85,6 +107,8 @@ export class DocumentSync {
 	opened(doc: Document): string {
 		this.shadow = doc.snapshot();
 		this.sentAt = doc.version();
+		this.kept = [];
+		this.keep();
 		const params: DidOpen = {
 			textDocument: { uri: this.uri, languageId: this.languageId, version: this.version, text: this.wire(doc.text()) },
 		};
@@ -99,6 +123,7 @@ export class DocumentSync {
 		const id: VersionedId = { uri: this.uri, version: this.version };
 		if (logged === null) {
 			this.shadow = doc.snapshot();
+			this.keep();
 			const whole: DidChangeWhole = { textDocument: id, contentChanges: [{ text: this.wire(doc.text()) }] };
 			return JSON.stringify<DidChangeWhole>(whole);
 		}
@@ -112,16 +137,29 @@ export class DocumentSync {
 			});
 			this.shadow.replace(from, to, c.text);
 		}
+		this.keep();
 		const ranged: DidChangeRanges = { textDocument: id, contentChanges: changes };
 		return JSON.stringify<DidChangeRanges>(ranged);
 	}
 
 	offsetNow(doc: Document, p: Position, bias: Bias): int32 {
-		const logged = doc.changesSince(this.sentAt);
-		if (logged === null) { return doc.offsetOf(p); }
-		let offset = offsetIn(this.shadow, p);
-		for (const c of logged) { offset = mapOffset(offset, c.change, bias); }
-		return offset;
+		const found = mapped(doc, this.shadow, this.sentAt, p, bias);
+		return found === null ? doc.offsetOf(p) : found as int32;
+	}
+
+	keeps(version: int32): boolean {
+		for (const k of this.kept) {
+			if (k.version == version) { return true; }
+		}
+		return false;
+	}
+
+	offsetAt(doc: Document, version: int32 | null, p: Position, bias: Bias): int32 | null {
+		if (version === null) { return this.offsetNow(doc, p, bias); }
+		for (const k of this.kept) {
+			if (k.version == version) { return mapped(doc, k.text, k.at, p, bias); }
+		}
+		return null;
 	}
 
 	saved(doc: Document, includeText: boolean): string {
@@ -212,6 +250,26 @@ when (testBuild) {
 		assert sync.offsetNow(d, { line: 1, character: 1 }, Bias.Right) == 7;
 		const _p = sync.changed(d, SyncKind.Incremental);
 		assert sync.offsetNow(d, { line: 1, character: 1 }, Bias.Right) == 4;
+	}
+
+	test "a position from an older version reads that version's text, and a forgotten one is dropped" {
+		const d = new Document("ab
+cd");
+		const sync = new DocumentSync("file:///a.ms", "metascript", d);
+		const _o = sync.opened(d);
+		const _a = d.splice({ from: 0, to: 0, text: "zz
+" });
+		const _p = sync.changed(d, SyncKind.Incremental);
+		const _b = d.splice({ from: 0, to: 0, text: "y" });
+		assert sync.offsetAt(d, 0, { line: 1, character: 1 }, Bias.Right) == 8;
+		assert sync.offsetAt(d, 1, { line: 1, character: 1 }, Bias.Right) == 5;
+		assert sync.offsetAt(d, null, { line: 1, character: 1 }, Bias.Right) == 5;
+		for (let i = 0; i < 10; i++) {
+			const _c = d.splice({ from: 0, to: 0, text: "w" });
+			const _q = sync.changed(d, SyncKind.Incremental);
+		}
+		assert sync.offsetAt(d, 0, { line: 1, character: 1 }, Bias.Right) === null;
+		assert sync.offsetAt(d, 11, { line: 0, character: 0 }, Bias.Right) == 0;
 	}
 
 	test "save and close name the document" {

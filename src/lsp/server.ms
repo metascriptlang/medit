@@ -131,9 +131,10 @@ export class Server {
 
 	on(method: string, handler: NotificationHandler): void { this.client.on(method, handler); }
 
-	initialize(rootUri: string | null, processId: int32, done: (error: string | null) => void): void {
+	initialize(rootUri: string | null, processId: int32 | null, done: (error: string | null) => void): void {
 		const root = rootUri === null ? "null" : JSON.stringify<string>(rootUri as string);
-		const params = `{"processId":${processId},"rootUri":${root},"capabilities":${CLIENT_CAPABILITIES},`
+		const pid = processId === null ? "null" : `${processId as int32}`;
+		const params = `{"processId":${pid},"rootUri":${root},"capabilities":${CLIENT_CAPABILITIES},`
 			+ `"clientInfo":{"name":"medic"}}`;
 		const _id = this.client.request("initialize", params, (r: Reply): void => {
 			if (r.failed()) {
@@ -211,16 +212,24 @@ export class Server {
 		return (this.sync as DocumentSync).offsetNow(doc, p, bias);
 	}
 
+	// Null when the diagnostics name another document, or a version whose text is no longer kept.
 	diagnosticsOf(doc: Document, params: JsonValue): Diagnostic[] | null {
 		if (this.sync === null || params.getDynamicField("uri").asString() != (this.sync as DocumentSync).uri) { return null; }
+		const sync = this.sync as DocumentSync;
+		const v = params.getDynamicField("version");
+		const version: int32 | null = isKind(v, JsonKind.Null) ? null : v.asInt32();
+		if (version !== null && !sync.keeps(version as int32)) { return null; }
 		const list = params.getDynamicField("diagnostics");
 		const out: Diagnostic[] = [];
 		for (let i = 0; i < list.length(); i++) {
 			const d = list.at(i);
 			const range = rangeOf(d.getDynamicField("range"));
+			const from = sync.offsetAt(doc, version, range.start, Bias.Right);
+			const to = sync.offsetAt(doc, version, range.end, Bias.Left);
+			if (from === null || to === null) { return null; }
 			out.push({
-				from: this.offsetNow(doc, range.start, Bias.Right),
-				to: this.offsetNow(doc, range.end, Bias.Left),
+				from: from as int32,
+				to: Math.max(from as int32, to as int32),
 				severity: severityOf(d.getDynamicField("severity").asInt32(1)),
 				message: d.getDynamicField("message").asString(),
 				source: d.getDynamicField("source").asString(),
@@ -335,6 +344,9 @@ when (testBuild) {
 		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		const _e = d.splice({ from: 0, to: 0, text: "xx\n" });
+		const stale = JSON.parseValue("{\"uri\":\"file:///a.ms\",\"version\":7,\"diagnostics\":[]}");
+		assert stale.ok;
+		if (stale.ok) { assert server.diagnosticsOf(d, stale.value) === null; }
 		const params = JSON.parseValue("{\"uri\":\"file:///a.ms\",\"diagnostics\":[{\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":2}},\"severity\":2,\"message\":\"m\",\"source\":\"s\"}]}");
 		assert params.ok;
 		if (params.ok) {
