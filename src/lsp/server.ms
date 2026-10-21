@@ -5,6 +5,7 @@ import { Parameter, Signature, SignatureAsk, SignatureHelp } from "../model/sign
 import { Occurrence } from "../model/occurrences";
 import { OutlineItem } from "../model/outline";
 import { CodeAction } from "../model/actions";
+import { Inlay } from "../model/inlays";
 import { refined } from "../model/patch";
 import { Client, NotificationHandler, Reply, failed, quoted } from "./client";
 import { DocumentSync, SyncKind } from "./sync";
@@ -32,7 +33,8 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true},"
 	+ "\"codeAction\":{\"codeActionLiteralSupport\":{\"codeActionKind\":{\"valueSet\":[\"\",\"quickfix\",\"refactor\","
 	+ "\"refactor.extract\",\"refactor.inline\",\"refactor.rewrite\",\"source\",\"source.organizeImports\",\"source.fixAll\"]}},"
-	+ "\"isPreferredSupport\":true,\"dataSupport\":true,\"resolveSupport\":{\"properties\":[\"edit\"]}}"
+	+ "\"isPreferredSupport\":true,\"dataSupport\":true,\"resolveSupport\":{\"properties\":[\"edit\"]}},"
+	+ "\"inlayHint\":{}"
 	+ "},"
 	+ "\"workspace\":{\"configuration\":true,\"applyEdit\":true,\"executeCommand\":{}},"
 	+ "\"window\":{\"workDoneProgress\":false,\"showMessage\":{}}"
@@ -125,6 +127,7 @@ const DEPRECATED: int32 = 1;
 const SNIPPET: int32 = 2;
 const INVOKED: int32 = 1;
 const TRIGGER_CHARACTER: int32 = 2;
+const PARAMETER_HINT: int32 = 2;
 
 function present(v: JsonValue): boolean { return !isKind(v, JsonKind.Null); }
 
@@ -197,6 +200,13 @@ export function plainMarkdown(text: string): string {
 		out += c;
 	}
 	return out;
+}
+
+function labelOf(label: JsonValue): string {
+	if (!isKind(label, JsonKind.Array)) { return label.asString().split("\n").join(" "); }
+	let text = "";
+	for (let i = 0; i < label.length(); i++) { text += label.at(i).getDynamicField("value").asString(); }
+	return text.split("\n").join(" ");
 }
 
 function tagged(tags: JsonValue, tag: int32): boolean {
@@ -739,6 +749,32 @@ export class Server {
 		});
 	}
 
+	inlayHints(doc: Document, from: int32, to: int32, done: (found: Inlay[] | null) => void): int32 {
+		if (!this.provides("inlayHintProvider")) { return -1; }
+		const r: Range = { start: doc.positionOf(from), end: doc.positionOf(to) };
+		const params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"range":${JSON.stringify<Range>(r)}}`;
+		return this.request(doc, "textDocument/inlayHint", params, (result: JsonValue, version: int32): void => {
+			const sync = this.sync as DocumentSync;
+			const found: Inlay[] = [];
+			for (let i = 0; i < result.length(); i++) {
+				const h = result.at(i);
+				const p = h.getDynamicField("position");
+				const bias = h.getDynamicField("kind").asInt32(0) == PARAMETER_HINT ? Bias.Left : Bias.Right;
+				const position: Position = { line: p.getDynamicField("line").asInt32(), character: p.getDynamicField("character").asInt32() };
+				const at = sync.offsetAt(doc, version, position, bias);
+				if (at === null) {
+					done(null);
+					return;
+				}
+				const label = labelOf(h.getDynamicField("label"));
+				const left = h.getDynamicField("paddingLeft").asBoolean(false) && !label.startsWith(" ") ? " " : "";
+				const right = h.getDynamicField("paddingRight").asBoolean(false) && !label.endsWith(" ") ? " " : "";
+				found.push({ at: at as int32, text: left + label + right, bias });
+			}
+			done(found);
+		}, (message: string): void => { done(null); });
+	}
+
 	hover(doc: Document, offset: int32, done: (text: string, over: Span | null) => void): int32 {
 		if (!this.provides("hoverProvider")) { return -1; }
 		return this.ask(doc, "textDocument/hover", offset, (result: JsonValue, version: int32): void => {
@@ -908,7 +944,7 @@ when (testBuild) {
 		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true},"
 			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"documentFormattingProvider\":true,\"documentHighlightProvider\":true,"
 			+ "\"renameProvider\":{\"prepareProvider\":true},\"referencesProvider\":true,\"documentSymbolProvider\":true,"
-			+ "\"codeActionProvider\":{\"resolveProvider\":true},\"executeCommandProvider\":{\"commands\":[\"fix.all\"]}}}"));
+			+ "\"codeActionProvider\":{\"resolveProvider\":true},\"executeCommandProvider\":{\"commands\":[\"fix.all\"]},\"inlayHintProvider\":true}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		return [server, wire, d];
 	}
@@ -1165,5 +1201,28 @@ when (testBuild) {
 		const _a = server.applyAction(d, f[0], keep);
 		const _s = d.splice((edits as Edit[])[0]);
 		assert d.text() == "let x = 1;\n";
+	}
+
+	test "inlay hints map onto the text now, padded, a parameter's kept left of an insert, and a stale answer is dropped" {
+		const [server, wire, d] = completing("let x = add(1, 2);\n");
+		let found: Inlay[] | null = null;
+		const id = server.inlayHints(d, 0, d.length(), (f: Inlay[] | null): void => { found = f; });
+		const asked = wire.sent[wire.sent.length - 1];
+		assert asked.includes("\"method\":\"textDocument/inlayHint\"") && asked.includes("\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":1,\"character\":0}}");
+		const _e = d.splice({ from: 0, to: 0, text: "  " });
+		server.receive(reply(id, "[{\"position\":{\"line\":0,\"character\":5},\"label\":\": int32\",\"kind\":1},"
+			+ "{\"position\":{\"line\":0,\"character\":12},\"label\":[{\"value\":\"a\"},{\"value\":\":\"}],\"kind\":2,\"paddingRight\":true},"
+			+ "{\"position\":{\"line\":0,\"character\":15},\"label\":\"b: \",\"kind\":2,\"paddingLeft\":true,\"paddingRight\":true}]"));
+		const f = found as Inlay[];
+		assert f.length == 3 && f[0].at == 7 && f[0].text == ": int32" && f[0].bias == Bias.Right;
+		assert f[1].at == 14 && f[1].text == "a: " && f[1].bias == Bias.Left && f[2].text == " b: ";
+		let late: Inlay[] | null = [];
+		const lid = server.inlayHints(d, 0, d.length(), (g: Inlay[] | null): void => { late = g; });
+		for (let k = 0; k < 11; k++) {
+			const _x = d.splice({ from: 0, to: 0, text: "x" });
+			server.changed(d);
+		}
+		server.receive(reply(lid, "[{\"position\":{\"line\":0,\"character\":5},\"label\":\": int32\",\"kind\":1}]"));
+		assert late === null;
 	}
 }

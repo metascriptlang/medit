@@ -6,6 +6,7 @@ import { Occurrence } from "../model/occurrences";
 import { Place } from "../model/references";
 import { OutlineItem } from "../model/outline";
 import { CodeAction } from "../model/actions";
+import { Inlay } from "../model/inlays";
 import { Server, Span, Target } from "./server";
 
 export interface Link {
@@ -150,6 +151,10 @@ export class Session {
 
 	applyAction(action: CodeAction, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
 		return this.server.applyAction(this.doc, action, done);
+	}
+
+	inlayHints(from: int32, to: int32, done: (found: Inlay[] | null) => void): int32 {
+		return this.server.inlayHints(this.doc, from, to, done);
 	}
 
 	// Who applies the edits the server asks for on its own, as after a code action's command.
