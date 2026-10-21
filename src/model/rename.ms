@@ -95,12 +95,9 @@ export class Renamer {
 				this.told(`rename failed: ${error as string}`);
 				return;
 			}
-			if (others > 0) {
-				this.told(`rename refused: it also changes ${others} file${others == 1 ? " that is" : "s that are"} not open, and medic edits open files only`);
-				return;
-			}
 			const skipped = acceptLater(this.editor, edits as Edit[], doc.version(), "");
 			if (skipped > 0) { this.told(`left out ${skipped} rename edit${skipped == 1 ? "" : "s"} that overlap another`); }
+			else if (others > 0) { this.told(`rename also changed ${others} other file${others == 1 ? "" : "s"}, not saved yet`); }
 		});
 		if (id < 0) {
 			this.told("no language server renames in this file");
@@ -200,7 +197,7 @@ when (testBuild) {
 		assert r.renaming() === null && notes[0] == "nothing to rename here";
 	}
 
-	test "an empty or unchanged name, another file, a failure or no word end the rename without a change" {
+	test "an empty or unchanged name, a failure or no word end the rename without a change, and other files changed are told" {
 		const [e, fake, r, notes] = renamer("ab + ab");
 		e.select(single(1));
 		r.start();
@@ -210,8 +207,8 @@ when (testBuild) {
 		assert fake.renames.length == 0;
 		r.start();
 		r.confirm("cd");
-		fake.renameAnswers[0]([{ from: 0, to: 2, text: "cd" }], 2, null);
-		assert e.doc.text() == "ab + ab" && notes[0] == "rename refused: it also changes 2 files that are not open, and medic edits open files only";
+		fake.renameAnswers[0]([], 2, null);
+		assert e.doc.text() == "ab + ab" && notes[0] == "rename also changed 2 other files, not saved yet";
 		r.start();
 		r.confirm("cd");
 		fake.renameAnswers[1](null, 0, "not a symbol");

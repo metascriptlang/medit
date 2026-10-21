@@ -99,12 +99,9 @@ export class CodeActions {
 				this.told(`${action.title} failed: ${error as string}`);
 				return;
 			}
-			if (others > 0) {
-				this.told(`${action.title} refused: it also changes ${others} file${others == 1 ? " that is" : "s that are"} not open, and medic edits open files only`);
-				return;
-			}
 			const skipped = acceptLater(this.editor, edits as Edit[], this.editor.doc.version(), "");
 			if (skipped > 0) { this.told(`left out ${skipped} edit${skipped == 1 ? "" : "s"} of ${action.title} that overlap another`); }
+			else if (others > 0) { this.told(`${action.title} also changed ${others} other file${others == 1 ? "" : "s"}, not saved yet`); }
 		});
 		if (id < 0) { this.told("no language server applies code actions in this file"); }
 		else if (!answered) { this.asked = id; }
@@ -195,8 +192,8 @@ when (testBuild) {
 		actions.toggle();
 		fake.answers[3]([action("Import x")]);
 		actions.pick(0);
-		fake.results[0](null, 2, null);
-		assert notes[1] == "Import x refused: it also changes 2 files that are not open, and medic edits open files only";
+		fake.results[0]([], 2, null);
+		assert notes[1] == "Import x also changed 2 other files, not saved yet";
 		assert e.doc.text() == "abc\n";
 		actions.toggle();
 		fake.answers[4]([action("Fix")]);
