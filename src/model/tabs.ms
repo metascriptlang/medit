@@ -32,6 +32,13 @@ export class Tabs {
 			this.activate(found);
 			return false;
 		}
+		this.add(key);
+		this.activate(this.at + 1);
+		return true;
+	}
+
+	add(key: string): boolean {
+		if (indexIn(this.list, key) >= 0) { return false; }
 		const insertAt = this.at + 1;
 		const grown: string[] = [];
 		for (let i = 0; i < (this.list.length as int32); i++) {
@@ -40,7 +47,7 @@ export class Tabs {
 		}
 		if (insertAt == (this.list.length as int32)) { grown.push(key); }
 		this.list = grown;
-		this.activate(insertAt);
+		this.history.push(key);
 		return true;
 	}
 
@@ -110,6 +117,16 @@ when (testBuild) {
 		tabs.activate(0);
 		assert tabs.open("d");
 		assert joined(tabs) == "a,d,b,c" && tabs.activeIndex() == 1;
+	}
+
+	test "an added tab sits after the active one, stays inactive and is the least recent" {
+		const tabs = new Tabs();
+		tabs.open("a");
+		tabs.open("b");
+		tabs.activate(0);
+		assert tabs.add("c") && !tabs.add("b");
+		assert joined(tabs) == "a,c,b" && tabs.active() == "a";
+		assert tabs.recent().join(",") == "a,b,c";
 	}
 
 	test "opening a key already open activates it in place" {
