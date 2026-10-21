@@ -21,7 +21,8 @@ import {
 } from "../../../../model/commands";
 import { Completer, MenuMove, Provider } from "../../../../model/completer";
 import { Completion, queryAt } from "../../../../model/completion";
-import { KeyPress, Outcome, completionKeymap, defaultKeymap } from "../../../../input/keymap";
+import { SignatureAsk, SignatureHelp, SignatureHelper, SignatureProvider } from "../../../../model/signatures";
+import { KeyPress, Outcome, completionKeymap, defaultKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
@@ -42,6 +43,7 @@ import { createFinder } from "../find/finder";
 import { GoToBar } from "../goto/goToBar";
 import { HoverCard, cardOf, cardSize, placed } from "../hover/hoverCard";
 import { CompletionMenu, MENU_BORDER, MENU_ROWS, menuColumns, menuPlaced, menuRows, scrolledTop } from "../completion/completionMenu";
+import { signatureCard, signaturePlaced } from "../signature/signatureCard";
 import { createBlink } from "./blink";
 import { Grid, framed, gutterWidth, painted } from "./paint";
 
@@ -133,6 +135,23 @@ export function EditorPane(props: {
 		triggers: (): string[] => session === null ? [] : (session as Session).completionTriggers(),
 	};
 	const completer = new Completer(editor, provider, (): void => { menuChanged(); });
+	const signKeys = signatureKeymap(false);
+	const signKeysSeveral = signatureKeymap(true);
+	const [signed, setSigned] = createSignal<boolean>(false);
+	const [signBox, setSignBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const signRows: List<Row> = createList<Row>([]);
+	let signChanged: () => void = (): void => {};
+	const signatureProvider: SignatureProvider = {
+		ask: (q: SignatureAsk, done: (help: SignatureHelp | null) => void): int32 =>
+			session === null ? -1 : (session as Session).signatureHelp(q, done),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+		wait: (ms: int32, run: () => void): int32 => setTimeout(run, ms) as int32,
+		stopWaiting: (timer: int32): void => { clearTimeout(timer); },
+		busy: (): boolean => completer.shown(),
+		triggers: (): string[] => session === null ? [] : (session as Session).signatureTriggers(),
+	};
+	const signer = new SignatureHelper(editor, signatureProvider, (): void => { signChanged(); });
+	const extension = props.path.lastIndexOf(".") < 0 ? "" : props.path.slice(props.path.lastIndexOf(".") + 1);
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
 	const rowsIn = (line: int32): int32 => rowsOf(doc, line, wrapWidth()).length as int32;
@@ -257,6 +276,26 @@ export function EditorPane(props: {
 		placeAside(place.box, place.above);
 	};
 
+	const placeSignature = (): void => {
+		const help = signer.help;
+		const head = editor.selections.primaryRange().head;
+		let row = -1;
+		for (let k = 0; k < (frame.length as int32) && row < 0 && help !== null; k++) {
+			if (frame[k].holds(head)) { row = k; }
+		}
+		if (row < 0 || grid.cellWidth <= 0) {
+			if (signed()) { setSigned(false); }
+			return;
+		}
+		const card = signatureCard(help as SignatureHelp, signer.current, extension, columns, view.rows, highlight);
+		const cell = Math.max(0, cellIn(doc, frame[row], head) - view.left);
+		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
+		const menu = menued() ? menuBox() : null;
+		setSignBox(signaturePlaced(card, x, row * grid.rowHeight, grid.rowHeight, grid.cellWidth, areaWidth, areaHeight, menu));
+		fill(signRows, card.rows);
+		setSigned(true);
+	};
+
 	const paint = (): void => {
 		fit();
 		if (session !== null) { (session as Session).edited(); }
@@ -268,6 +307,7 @@ export function EditorPane(props: {
 		if (p.primary !== null) { setCaret(p.primary); }
 		blink.restart();
 		placeMenu();
+		placeSignature();
 		report();
 	};
 
@@ -384,8 +424,13 @@ export function EditorPane(props: {
 		if (completer.shown()) { hideCard(); }
 		if (grid.cellWidth > 0) { paint(); }
 	};
+	signChanged = (): void => {
+		if (grid.cellWidth > 0) { paint(); }
+	};
 	const menuCommands = new Set<string>(menuKeys.commands());
 	menuCommands.add("showCompletions");
+	const signatureCommands = new Set<string>(signKeysSeveral.commands());
+	signatureCommands.add("showSignatureHelp");
 
 	const cx: Context = {
 		pageRows: (): int32 => Math.max(1, view.rows - 1),
@@ -456,11 +501,16 @@ export function EditorPane(props: {
 		completionMenu: (move: MenuMove): void => { completer.move(move); },
 		confirmCompletion: (replace: boolean | null): void => {
 			const skipped = completer.confirm(replace);
-			if (skipped !== null && (skipped as int32) > 0) {
+			if (skipped === null) { return; }
+			if ((skipped as int32) > 0) {
 				notice = `left out ${skipped as int32} edit${skipped == 1 ? "" : "s"} the completion brought that overlap it`;
 			}
+			signer.invoke();
 		},
 		hideCompletions: (): void => { completer.hide(); },
+		showSignatureHelp: (): void => { signer.invoke(); },
+		cycleSignature: (forward: boolean): void => { signer.cycle(forward); },
+		hideSignatureHelp: (): void => { signer.dismiss(); },
 		goToLine: (): void => {
 			goingFrom = view;
 			setGoingTo(true);
@@ -501,7 +551,10 @@ export function EditorPane(props: {
 			return;
 		}
 		command(editor, cx);
-		if (!menuCommands.has(name)) { completer.moved(); }
+		if (!menuCommands.has(name) && !signatureCommands.has(name)) {
+			completer.moved();
+			signer.moved(null);
+		}
 		reveal();
 		if (after !== null) {
 			const then = after as () => void;
@@ -521,6 +574,13 @@ export function EditorPane(props: {
 				run(m.command);
 				return;
 			}
+		} else if (signer.shown() && keymap.pendingChords() == "") {
+			const several = (signer.help as SignatureHelp).signatures.length > 1;
+			const m = (several ? signKeysSeveral : signKeys).feed(key);
+			if (m.outcome == Outcome.Run) {
+				run(m.command);
+				return;
+			}
 		}
 		const r = keymap.feed(key);
 		if (r.outcome == Outcome.Run) { run(r.command); }
@@ -528,6 +588,7 @@ export function EditorPane(props: {
 			insertText(editor, e.text);
 			reveal();
 			completer.typed(e.text);
+			signer.moved(e.text);
 		}
 	};
 
@@ -537,6 +598,7 @@ export function EditorPane(props: {
 		insertText(editor, e.text);
 		reveal();
 		completer.typed(e.text);
+		signer.moved(e.text);
 	};
 
 	const offsetAt = (e: NeonEvent): int32 => {
@@ -566,6 +628,7 @@ export function EditorPane(props: {
 		lastPress = now;
 		lastOffset = offset;
 		gesture = press(editor, offset, clicks, e.shiftKey, e.altKey);
+		signer.moved(null);
 		paint();
 	};
 
@@ -581,6 +644,7 @@ export function EditorPane(props: {
 			frame = framed(doc, view, wrapWidth());
 		}
 		drag(editor, gesture as Gesture, offsetAt(e));
+		signer.moved(null);
 		reveal();
 	};
 
@@ -632,6 +696,7 @@ export function EditorPane(props: {
 		view = next;
 		if (moved) {
 			hideCard();
+			signer.dismiss();
 			paint();
 		}
 	};
@@ -702,6 +767,13 @@ export function EditorPane(props: {
 				shown={asided()}
 				box={asideBox()}
 				rows={asideRows}
+				cellWidth={drawn().cellWidth}
+				rowHeight={drawn().rowHeight}
+			/>
+			<HoverCard
+				shown={signed()}
+				box={signBox()}
+				rows={signRows}
 				cellWidth={drawn().cellWidth}
 				rowHeight={drawn().rowHeight}
 			/>
