@@ -1,9 +1,11 @@
 import { TextSpan } from "../../../../../../neon/src/render/hostTypes";
+import { Style } from "../../../../../../neon/src/render/style";
 import { Document } from "../../../../model/document";
 import { Sel, Selections, end, isEmpty, primaryRange, start } from "../../../../model/selection";
 import { cellsBetween } from "../../../../model/motion";
 import { Viewport } from "../../../../view/viewport";
-import { VisualRow, cellIn, holds, rowPieces, rowsOf } from "../../../../view/wrap";
+import { Mark, Piece, VisualRow, cellIn, holds, rowPieces, rowsOf } from "../../../../view/wrap";
+import { Diagnostic, Severity } from "../../../../model/diagnostics";
 import { Syntax } from "../../../../syntax/syntax";
 import {
 	CARET,
@@ -12,8 +14,10 @@ import {
 	CURRENT_NUMBER,
 	MATCH,
 	MUTED,
+	FADED_ALPHA,
 	SELECTION,
 	colorOf,
+	severityColor,
 } from "../../../theme";
 import { Box } from "../../ui/overlay";
 import { Row } from "../../content/lineRow";
@@ -51,6 +55,22 @@ export function framed(doc: Document, view: Viewport, wrapWidth: int32): VisualR
 	return out;
 }
 
+function markOf(d: Diagnostic): Mark {
+	const drawn = !d.unnecessary || d.severity <= Severity.Warning;
+	return { from: d.from, to: d.to, faded: d.unnecessary, underline: drawn ? d.severity : null };
+}
+
+function styleOf(p: Piece): Style {
+	const color = colorOf(p.tone) + (p.faded ? FADED_ALPHA : "");
+	if (p.underline === null) { return { color }; }
+	return {
+		color,
+		textDecorationLine: "underline",
+		textDecorationStyle: "wavy",
+		textDecorationColor: severityColor(p.underline as Severity),
+	};
+}
+
 export function painted(
 	doc: Document,
 	selections: Selections,
@@ -59,6 +79,7 @@ export function painted(
 	frame: VisualRow[],
 	view: Viewport,
 	syntax: Syntax | null,
+	diagnostics: Diagnostic[],
 	grid: Grid,
 ): Painted {
 	const { cellWidth, rowHeight } = grid;
@@ -70,6 +91,7 @@ export function painted(
 	const top = frame.length > 0 ? frame[0].from : 0;
 	const bottom = frame.length > 0 ? frame[frame.length - 1].to : 0;
 	const tones = syntax === null ? [] : syntax.tonesIn(doc, top, bottom);
+	const decor = diagnostics.map((d: Diagnostic): Mark => markOf(d));
 	const rows: Row[] = [];
 	for (const r of frame) {
 		const number = r.cell == 0 ? `${r.line + 1}` : "";
@@ -77,8 +99,8 @@ export function painted(
 			text: number.padStart(digits, " ") + "".padStart(GUTTER_GAP, " "),
 			style: { color: r.line == current ? CURRENT_NUMBER : MUTED },
 		}];
-		for (const p of rowPieces(doc, r, view.left, view.cols, tones, top)) {
-			spans.push({ text: p.text, style: { color: colorOf(p.tone) } });
+		for (const p of rowPieces(doc, r, view.left, view.cols, tones, top, decor)) {
+			spans.push({ text: p.text, style: styleOf(p) });
 		}
 		rows.push({ spans });
 	}

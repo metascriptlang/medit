@@ -1,4 +1,5 @@
 import { Tone } from "../view/tone";
+import { Severity } from "../model/diagnostics";
 
 export const BACKGROUND = "#1e1e2e";
 export const FOREGROUND = "#cdd6f4";
@@ -11,6 +12,7 @@ export const CURRENT_NUMBER = "#bac2de";
 export const CARET = "#f5e0dc";
 export const PANEL = "#181825";
 export const FIELD = "#313244";
+export const FADED_ALPHA = "b3";
 export const PADDING: float64 = 6;
 export const FONT_SIZE: float64 = 14;
 
@@ -29,5 +31,14 @@ export function colorOf(tone: Tone): string {
 		Tone.Property => "#b4befe",
 		Tone.Builtin => "#f38ba8",
 		Tone.Attribute => "#f5c2e7",
+	};
+}
+
+export function severityColor(severity: Severity): string {
+	return match (severity) {
+		Severity.Error => "#f38ba8",
+		Severity.Warning => "#f9e2af",
+		Severity.Information => "#89b4fa",
+		Severity.Hint => "#94e2d5",
 	};
 }
