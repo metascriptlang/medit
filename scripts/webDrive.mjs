@@ -2,7 +2,7 @@
 //   node scripts/webDrive.mjs <url> <outDir> <step>...
 // Steps: wait:<ms>  shot:<name>  wheel:<deltaY>  hwheel:<deltaX>  key:[ctrl+][alt+][shift+]<key>[*n]  type:<text> (keypresses)  text:<text> (insertText)
 //        compose:<text>  commit:<text>  click:<x>,<y>[,<count>][,alt|shift]  drag:<x1>,<y1>,<x2>,<y2>[,<moves>]
-//        move:<x>,<y> (no button held)
+//        move:<x>,<y> (no button held)  hold:ctrl|alt|shift  release:ctrl|alt|shift (keys between carry it)
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,7 +41,11 @@ const pending = new Map();
 ws.addEventListener("message", (e) => {
 	const m = JSON.parse(e.data);
 	if (m.method === "Runtime.consoleAPICalled") {
-		console.log("page:", m.params.args.map((a) => a.value ?? a.description).join(" "));
+		console.log(m.params.type === "log" ? "page:" : `page ${m.params.type}:`, m.params.args.map((a) => a.value ?? a.description).join(" "));
+	}
+	if (m.method === "Runtime.exceptionThrown") {
+		const d = m.params.exceptionDetails;
+		console.log("page exception:", d.exception?.description ?? d.text);
 	}
 	if (m.id && pending.has(m.id)) {
 		pending.get(m.id)(m);
@@ -62,6 +66,8 @@ const VK = {
 };
 const PUNCTUATION = { "/": ["Slash", 191], ".": ["Period", 190], ",": ["Comma", 188], "[": ["BracketLeft", 219], "]": ["BracketRight", 221] };
 const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
+const MODIFIER_KEYS = { ctrl: ["Control", "ControlLeft", 17], alt: ["Alt", "AltLeft", 18], shift: ["Shift", "ShiftLeft", 16] };
+let held = 0;
 
 function keyOf(chord) {
 	const parts = chord.split("+");
@@ -101,9 +107,16 @@ for (const step of steps) {
 	} else if (kind === "hwheel") {
 		await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 400, y: 300, deltaX: Number(arg), deltaY: 0 });
 		await sleep(100);
+	} else if (kind === "hold" || kind === "release") {
+		const [key, code, vk] = MODIFIER_KEYS[arg];
+		if (kind === "hold") held |= MOD_BITS[arg];
+		else held &= ~MOD_BITS[arg];
+		await send("Input.dispatchKeyEvent", { type: kind === "hold" ? "rawKeyDown" : "keyUp", key, code, windowsVirtualKeyCode: vk, modifiers: held });
+		await sleep(50);
 	} else if (kind === "key") {
 		const [chord, times = "1"] = arg.split("*");
 		const k = keyOf(chord);
+		k.modifiers |= held;
 		for (let i = 0; i < Number(times); i++) {
 			await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...k });
 			await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
