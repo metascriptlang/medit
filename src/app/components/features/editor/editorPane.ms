@@ -1,5 +1,5 @@
 import { NeonNode } from "../../../../../../neon/src/render/node";
-import { NeonEvent } from "../../../../../../neon/src/render/event";
+import { DOM_DELTA_PIXEL, NeonEvent } from "../../../../../../neon/src/render/event";
 import { Accessor, createSignal } from "../../../../../../neon/src/core/signal";
 import { List, createList } from "../../../../../../neon/src/core/list";
 import { onSettled } from "../../../../../../neon/src/core/effect";
@@ -113,7 +113,7 @@ export function EditorPane(props: {
 	const finder = createFinder(editor);
 	const blink = createBlink();
 	let area: ViewHandle | null = null;
-	let view: Viewport = { line: 0, sub: 0, left: 0, rows: 0, cols: 0, pending: 0 };
+	let view: Viewport = { line: 0, sub: 0, left: 0, rows: 0, cols: 0, pending: 0, pendingCols: 0 };
 	let columns = 0;
 	let areaHeight = 0.0;
 	let wrap = false;
@@ -1154,11 +1154,21 @@ export function EditorPane(props: {
 		return most;
 	};
 
-	const wheeled = (e: NeonEvent): void => {
+	const notched = (e: NeonEvent): Viewport => {
 		const sideways = e.deltaX != 0 ? e.deltaX : e.shiftKey ? -e.deltaY : 0;
-		const next = sideways != 0
+		return sideways != 0
 			? (wrap ? view : view.slid(sideways, widest()))
 			: view.wheeled(e.deltaY, doc.lineCount(), rowsIn, spanOf);
+	};
+
+	const panned = (e: NeonEvent): Viewport => {
+		if (grid.rowHeight <= 0 || grid.cellWidth <= 0) { return view; }
+		const down = view.nudged(-e.deltaY / grid.rowHeight, doc.lineCount(), rowsIn, spanOf);
+		return wrap || e.deltaX == 0 ? down : down.shifted(e.deltaX / grid.cellWidth, widest());
+	};
+
+	const wheeled = (e: NeonEvent): void => {
+		const next = e.deltaMode == DOM_DELTA_PIXEL ? panned(e) : notched(e);
 		const moved = next.line != view.line || next.sub != view.sub || next.left != view.left;
 		view = next;
 		if (moved) {
