@@ -21,7 +21,7 @@ import { BracketPair, enclosingBrackets } from "./brackets";
 import { MenuMove } from "./completer";
 import { Expander } from "./expand";
 import { Folds, lineAfter, shownEnd, shownLine } from "./folds";
-import { BlockComment } from "./language";
+import { BlockComment, DocComment } from "./language";
 import {
 	WordCase,
 	oppositeCase,
@@ -34,6 +34,7 @@ import {
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
+const DOC_ALIGN = " ";
 const OPENERS = "([{";
 const CLOSERS = ")]}";
 
@@ -298,9 +299,70 @@ function commentContinued(e: Editor, line: int32, at: int32): string {
 	if (e.lineComment === null) { return ""; }
 	const marker = e.lineComment as string;
 	const bare = marker.trimEnd();
-	const from = indentEnd(e.doc, line);
-	if (at < from + bare.byteLength || e.doc.slice(from, from + bare.byteLength) != bare) { return ""; }
+	const doc = e.doc;
+	const from = indentEnd(doc, line);
+	if (at < from + bare.byteLength || doc.slice(from, from + bare.byteLength) != bare) { return ""; }
+	if (e.blockComment !== null) {
+		const open = (e.blockComment as BlockComment).open.trimEnd();
+		const opens = doc.slice(from, Math.min(doc.lineEnd(line), from + open.byteLength)) == open;
+		if (open.startsWith(bare) && opens) { return ""; }
+	}
 	return marker;
+}
+
+struct DocBreak {
+	lead: string;
+	extra: string | null;
+}
+
+function afterIndent(doc: Document, line: int32): [int32, string] {
+	const from = blankRight(doc, doc.lineStart(line));
+	return [from, doc.slice(from, doc.lineEnd(line))];
+}
+
+function commentOpenedAbove(e: Editor, c: DocComment, line: int32): int32 {
+	if (e.blockComment === null) { return -1; }
+	const open = (e.blockComment as BlockComment).open.trimEnd();
+	const star = c.prefix.trimEnd();
+	for (let l = line - 1; l >= 0; l--) {
+		const [_from, text] = afterIndent(e.doc, l);
+		if (text.startsWith(star)) {
+			if (text.includes(c.close)) { return -1; }
+			continue;
+		}
+		if (text.byteLength == 0) { continue; }
+		const opened = text.byteLength < open.byteLength ? -1 : text.byteLastIndexOf(open, text.byteLength - open.byteLength);
+		return opened >= 0 && text.byteIndexOf(c.close, opened + open.byteLength) < 0 ? l : -1;
+	}
+	return -1;
+}
+
+function docContinued(e: Editor, line: int32, at: int32): DocBreak | null {
+	if (e.docComment === null) { return null; }
+	const c = e.docComment as DocComment;
+	const [from, text] = afterIndent(e.doc, line);
+	const star = c.prefix.trimEnd();
+	const afterOpen = text.startsWith(c.open) && at >= from + c.open.byteLength;
+	const afterStar = text.startsWith(star) && at >= from + star.byteLength;
+	if (!afterOpen && !(afterStar && commentOpenedAbove(e, c, line) >= 0)) { return null; }
+	const close = text.byteIndexOf(c.close, 0);
+	const closeAt = close < 0 ? -1 : from + close;
+	if (closeAt >= 0 && at > closeAt) { return null; }
+	return {
+		lead: (afterOpen ? DOC_ALIGN : "") + c.prefix,
+		extra: afterOpen && closeAt >= 0 ? (at == closeAt ? DOC_ALIGN : "") : null,
+	};
+}
+
+function closingIndent(e: Editor, line: int32, at: int32): string | null {
+	if (e.docComment === null) { return null; }
+	const c = e.docComment as DocComment;
+	const [from, text] = afterIndent(e.doc, line);
+	if (!text.startsWith(c.close) || text.trimEnd() != c.close || at < from + c.close.byteLength) { return null; }
+	const opener = commentOpenedAbove(e, c, line);
+	if (opener < 0) { return null; }
+	const start = e.doc.lineStart(opener);
+	return e.doc.slice(start, blankRight(e.doc, start));
 }
 
 function newline(e: Editor, cx: Context): void {
@@ -313,17 +375,24 @@ function newline(e: Editor, cx: Context): void {
 		const s = ranges[i];
 		const line = doc.lineOf(s.start());
 		const lineFrom = doc.lineStart(line);
-		const indent = doc.slice(lineFrom, Math.min(indentEnd(doc, line), s.start()));
+		const closing = closingIndent(e, line, s.start());
+		const indent = closing !== null ? closing as string : doc.slice(lineFrom, Math.min(indentEnd(doc, line), s.start()));
 		let from = s.start();
 		let to = s.end();
 		let text = "\n" + indent;
 		let caret = text.byteLength;
-		const comment = commentContinued(e, line, from);
+		const comment = s.isEmpty() ? commentContinued(e, line, from) : "";
+		const docBreak = s.isEmpty() && comment == "" ? docContinued(e, line, from) : null;
 		const before = Math.max(blankLeft(doc, lineFrom, from), lastTo);
 		const opener = before > lineFrom ? OPENERS.indexOf(String.fromCharCode(doc.byteAt(before - 1))) : -1;
 		if (comment != "") {
 			text += comment;
 			caret = text.byteLength;
+		} else if (docBreak !== null) {
+			const d = docBreak as DocBreak;
+			text += d.lead;
+			caret = text.byteLength;
+			if (d.extra !== null) { text += "\n" + indent + (d.extra as string); }
 		} else if (opener >= 0) {
 			const inner = "\n" + indent + e.indent;
 			const after = blankRight(doc, to);
@@ -1293,6 +1362,70 @@ test "a newline in a line comment continues it, only after the marker" {
 	const plain = editorAt("// x", [4]);
 	run(plain, "newline");
 	assert plain.doc.text() == "// x\n";
+}
+
+test "a newline over a selection or on a block comment opener that starts like the marker does not continue it" {
+	const run = runner();
+	const e = editorAt("// note", [0]);
+	e.lineComment = "// ";
+	e.select({ ranges: [span(3, 5)], primary: 0 });
+	run(e, "newline");
+	assert e.doc.text() == "// \nte";
+	const lua = editorAt("--[[ x", [6]);
+	lua.lineComment = "-- ";
+	lua.blockComment = { open: "--[[ ", close: " ]]" };
+	run(lua, "newline");
+	assert lua.doc.text() == "--[[ x\n";
+}
+
+function docEditor(text: string, at: int32, open: string): Editor {
+	const e = editorAt(text, [at]);
+	e.lineComment = "// ";
+	e.blockComment = { open: "/* ", close: " */" };
+	e.docComment = { open, prefix: "* ", close: "*/" };
+	return e;
+}
+
+test "a newline inside a doc comment continues the star, after its opener too, aligned under the opener's star" {
+	const run = runner();
+	const middle = docEditor("\t/**\n\t * a\n\t */", 10, "/**");
+	run(middle, "newline");
+	assert middle.doc.text() == "\t/**\n\t * a\n\t * \n\t */" && heads(middle) == "15";
+	const opening = docEditor("\t/**", 4, "/**");
+	run(opening, "newline");
+	assert opening.doc.text() == "\t/**\n\t * " && heads(opening) == "9";
+	const c = docEditor("/* x", 4, "/*");
+	run(c, "newline");
+	assert c.doc.text() == "/* x\n * ";
+	const single = docEditor("/* x", 4, "/**");
+	run(single, "newline");
+	assert single.doc.text() == "/* x\n";
+}
+
+test "a newline between a doc opener and its closer puts the closer on its own line under the star" {
+	const run = runner();
+	const shut = docEditor("/***/", 3, "/**");
+	run(shut, "newline");
+	assert shut.doc.text() == "/**\n * \n */" && heads(shut) == "7";
+	const spaced = docEditor("/** a */", 5, "/**");
+	run(spaced, "newline");
+	assert spaced.doc.text() == "/** a\n * \n */" && heads(spaced) == "9";
+}
+
+test "a newline before the star, outside a comment, or after the closer does not continue the star" {
+	const run = runner();
+	const before = docEditor("/**\n * a\n */", 5, "/**");
+	run(before, "newline");
+	assert before.doc.text() == "/**\n\n * a\n */";
+	const outside = docEditor("x\n * y", 6, "/**");
+	run(outside, "newline");
+	assert outside.doc.text() == "x\n * y\n ";
+	const closed = docEditor("/* a */\n * y", 12, "/**");
+	run(closed, "newline");
+	assert closed.doc.text() == "/* a */\n * y\n ";
+	const after = docEditor("\t/**\n\t * a\n\t */", 15, "/**");
+	run(after, "newline");
+	assert after.doc.text() == "\t/**\n\t * a\n\t */\n\t" && heads(after) == "17";
 }
 
 test "a newline at the end of the indent moves the indent down with the line" {

@@ -22,6 +22,17 @@ const BLOCK_COMMENTS: Array<[BlockComment, string[]]> = [
 	[{ open: "{- ", close: " -}" }, ["hs"]],
 ];
 
+export struct DocComment {
+	open: string;
+	prefix: string;
+	close: string;
+}
+
+const DOC_COMMENTS: Array<[DocComment, string[]]> = [
+	[{ open: "/**", prefix: "* ", close: "*/" }, ["ms", "cms", "jms", "ems", "wms", "rms", "ts", "tsx", "js", "jsx", "mjs"]],
+	[{ open: "/*", prefix: "* ", close: "*/" }, ["c", "h", "cc", "cpp", "hpp", "rs", "go"]],
+];
+
 export struct Language {
 	id: string;
 	server: string;
@@ -73,6 +84,24 @@ export function blockCommentOf(path: string): BlockComment | null {
 		if (types.includes(type as string)) { return markers; }
 	}
 	return null;
+}
+
+export function docCommentOf(path: string): DocComment | null {
+	const type = typeOf(path);
+	if (type === null) { return null; }
+	for (const [shape, types] of DOC_COMMENTS) {
+		if (types.includes(type as string)) { return shape; }
+	}
+	return null;
+}
+
+test "a doc comment opens with two stars in script types, one in C-like types, and some types have none" {
+	const ts = docCommentOf("a/b.ts");
+	assert ts !== null && ts.open == "/**" && ts.prefix == "* " && ts.close == "*/";
+	const rs = docCommentOf("lib.rs");
+	assert rs !== null && rs.open == "/*";
+	assert docCommentOf("run.py") === null;
+	assert docCommentOf("Makefile") === null;
 }
 
 test "block comment markers follow the file type, and some types have none" {

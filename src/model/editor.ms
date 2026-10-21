@@ -1,5 +1,5 @@
 import { Anchor, Bias, Change, Document, Edit, mapOffset } from "./document";
-import { BlockComment } from "./language";
+import { BlockComment, DocComment } from "./language";
 import {
 	Sel,
 	Selections,
@@ -47,6 +47,7 @@ export class Editor {
 	caseSensitive: boolean = false;
 	lineComment: string | null = null;
 	blockComment: BlockComment | null = null;
+	docComment: DocComment | null = null;
 	indent: string = "\t";
 	private autoclosed: Autoclosed[] = [];
 	wordwiseNext: Selections | null = null;
