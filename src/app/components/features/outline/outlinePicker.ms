@@ -8,13 +8,12 @@ import { TextSpan } from "../../../../../../neon/src/render/hostTypes";
 import { Style } from "../../../../../../neon/src/render/style";
 import { MenuMove } from "../../../../model/completer";
 import { Outline, OutlineRow } from "../../../../model/outline";
-import { charsOf } from "../../../../text/fuzzy";
 import { Tone } from "../../../../view/tone";
 import { PANEL, colorOf } from "../../../theme";
 import { Field } from "../../ui/field";
 import { Box, Overlay } from "../../ui/overlay";
 import { LineRow, Row } from "../../content/lineRow";
-import { cellsOf, clipped } from "../completion/completionMenu";
+import { cellsOf, clipped, matchedSpans } from "../completion/completionMenu";
 
 export const OUTLINE_ROWS: int32 = 16;
 export const OUTLINE_PADDING: float64 = 6;
@@ -75,19 +74,7 @@ export function outlineRows(outline: Outline, top: int32, count: int32, columns:
 		const matched: Style = { color, textDecorationLine: "underline", textDecorationColor: color };
 		const indent = INDENT.repeat(item.depth);
 		const spans: TextSpan[] = [{ text: indent, style: base }];
-		const chars = charsOf(clipped(item.name, columns - cellsOf(indent)));
-		let run = "";
-		let lit = false;
-		for (let i = 0; i < (chars.text.length as int32); i++) {
-			const hit = listed[k].positions.includes(chars.at[i]);
-			if (hit != lit && run.byteLength > 0) {
-				spans.push({ text: run, style: lit ? matched : base });
-				run = "";
-			}
-			lit = hit;
-			run += chars.text[i];
-		}
-		if (run.byteLength > 0) { spans.push({ text: run, style: lit ? matched : base }); }
+		matchedSpans(clipped(item.name, columns - cellsOf(indent)), listed[k].positions, 0, base, matched, spans);
 		rows.push({ spans });
 	}
 	return rows;

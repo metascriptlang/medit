@@ -72,7 +72,11 @@ function labelSpans(c: Completion, positions: int32[], spans: TextSpan[]): int32
 		: { color: colorOf(kindTone(c.kind)) };
 	const color = base.color as string;
 	const matched: Style = { color, textDecorationLine: c.deprecated ? "underline line-through" : "underline", textDecorationColor: color };
-	const chars = charsOf(c.label);
+	return matchedSpans(c.label, positions, shift, base, matched, spans);
+}
+
+export function matchedSpans(text: string, positions: int32[], shift: int32, base: Style, matched: Style, spans: TextSpan[]): int32 {
+	const chars = charsOf(text);
 	let run = "";
 	let lit = false;
 	for (let i = 0; i < (chars.text.length as int32); i++) {
