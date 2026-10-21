@@ -19,6 +19,8 @@ import { MenuMove } from "./completer";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
+const OPENERS = "([{";
+const CLOSERS = ")]}";
 
 export interface Clip {
 	write: (text: string) => void;
@@ -240,14 +242,74 @@ export function insertText(e: Editor, text: string): void {
 	e.end();
 }
 
+function isBlank(b: int32): boolean { return b == " ".code || b == "\t".code; }
+
+function blankLeft(doc: Document, limit: int32, at: int32): int32 {
+	let k = at;
+	while (k > limit && isBlank(doc.byteAt(k - 1))) { k -= 1; }
+	return k;
+}
+
+function blankRight(doc: Document, at: int32): int32 {
+	let k = at;
+	while (k < doc.length() && isBlank(doc.byteAt(k))) { k += 1; }
+	return k;
+}
+
+function commentContinued(e: Editor, line: int32, at: int32): string {
+	if (e.lineComment === null) { return ""; }
+	const marker = e.lineComment as string;
+	const bare = marker.trimEnd();
+	const from = indentEnd(e.doc, line);
+	if (at < from + bare.byteLength || e.doc.slice(from, from + bare.byteLength) != bare) { return ""; }
+	return marker;
+}
+
 function newline(e: Editor, cx: Context): void {
-	const texts: string[] = [];
-	for (const s of e.selections.ranges) {
-		const line = e.doc.lineOf(s.start());
-		const kept = Math.min(indentEnd(e.doc, line), s.start());
-		texts.push("\n" + e.doc.slice(e.doc.lineStart(line), kept));
+	const doc = e.doc;
+	const ranges = e.selections.ranges;
+	const edits: Edit[] = [];
+	const carets: int32[] = [];
+	let lastTo = 0;
+	for (let i = 0; i < ranges.length; i++) {
+		const s = ranges[i];
+		const line = doc.lineOf(s.start());
+		const lineFrom = doc.lineStart(line);
+		const indent = doc.slice(lineFrom, Math.min(indentEnd(doc, line), s.start()));
+		let from = s.start();
+		let to = s.end();
+		let text = "\n" + indent;
+		let caret = text.byteLength;
+		const comment = commentContinued(e, line, from);
+		const before = Math.max(blankLeft(doc, lineFrom, from), lastTo);
+		const opener = before > lineFrom ? OPENERS.indexOf(String.fromCharCode(doc.byteAt(before - 1))) : -1;
+		if (comment != "") {
+			text += comment;
+			caret = text.byteLength;
+		} else if (opener >= 0) {
+			const inner = "\n" + indent + "\t";
+			const after = blankRight(doc, to);
+			const nextFrom = i + 1 < ranges.length ? ranges[i + 1].start() : doc.length();
+			from = before;
+			text = inner;
+			if (after < doc.length() && after <= nextFrom && doc.byteAt(after) == CLOSERS.byteAt(opener)) {
+				to = after;
+				text = inner + "\n" + indent;
+			}
+			caret = inner.byteLength;
+		} else if (s.isEmpty() && from > lineFrom && from == indentEnd(doc, line) && lineFrom >= lastTo) {
+			from = lineFrom;
+		}
+		edits.push({ from, to, text });
+		carets.push(caret);
+		lastTo = to;
 	}
-	e.replaceEach(texts);
+	e.begin();
+	const applied = e.change(edits);
+	const next: Sel[] = [];
+	for (let i = 0; i < applied.length; i++) { next.push(cursorAt(applied[i].from + carets[i])); }
+	e.select({ ranges: next, primary: e.selections.primary });
+	e.end();
 }
 
 function indent(e: Editor): void {
@@ -858,6 +920,57 @@ test "a newline keeps the indent before the cursor" {
 	run(e, "newline");
 	assert e.doc.text() == "\t  co\n\t  de";
 	assert heads(e) == "9";
+}
+
+test "a newline between brackets opens an indented line above the closer, as one step" {
+	const run = runner();
+	const e = editorAt("\tif (x) {}", [9]);
+	run(e, "newline");
+	assert e.doc.text() == "\tif (x) {\n\t\t\n\t}";
+	assert heads(e) == "12";
+	run(e, "undo");
+	assert e.doc.text() == "\tif (x) {}";
+	const spaced = editorAt("f( a )", [3]);
+	run(spaced, "newline");
+	assert spaced.doc.text() == "f(\n\ta )";
+	const tight = editorAt("[ ]", [1]);
+	run(tight, "newline");
+	assert tight.doc.text() == "[\n\t\n]";
+	assert heads(tight) == "3";
+	const unclosed = editorAt("call(", [5]);
+	run(unclosed, "newline");
+	assert unclosed.doc.text() == "call(\n\t";
+	const mismatched = editorAt("(]", [1]);
+	run(mismatched, "newline");
+	assert mismatched.doc.text() == "(\n\t]";
+}
+
+test "a newline in a line comment continues it, only after the marker" {
+	const run = runner();
+	const e = editorAt("\t// note", [8]);
+	e.lineComment = "// ";
+	run(e, "newline");
+	assert e.doc.text() == "\t// note\n\t// ";
+	assert heads(e) == "13";
+	const before = editorAt("// x", [0]);
+	before.lineComment = "// ";
+	run(before, "newline");
+	assert before.doc.text() == "\n// x";
+	const plain = editorAt("// x", [4]);
+	run(plain, "newline");
+	assert plain.doc.text() == "// x\n";
+}
+
+test "a newline at the end of the indent moves the indent down with the line" {
+	const run = runner();
+	const e = editorAt("\t\tx", [2]);
+	run(e, "newline");
+	assert e.doc.text() == "\n\t\tx";
+	assert heads(e) == "3";
+	const two = editorAt("\ta\n\tb", [1, 4]);
+	run(two, "newline");
+	assert two.doc.text() == "\n\ta\n\n\tb";
+	assert heads(two) == "2,6";
 }
 
 test "backspace at several cursors deletes one cluster each and is one step" {
