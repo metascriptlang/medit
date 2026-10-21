@@ -157,3 +157,61 @@ int32_t medicSyntaxMatchCapture(void* syntax, int32_t capture, int32_t* start, i
 	}
 	return 0;
 }
+
+static bool enclosingLarger(TSTreeCursor* cursor, uint32_t from, uint32_t to) {
+	bool ascending = false;
+	for (;;) {
+		TSNode node = ts_tree_cursor_current_node(cursor);
+		if (from == to && ts_node_start_byte(node) > from) {
+			ts_tree_cursor_goto_previous_sibling(cursor);
+			node = ts_tree_cursor_current_node(cursor);
+		} else if (from != to && ts_node_end_byte(node) == from) {
+			ts_tree_cursor_goto_next_sibling(cursor);
+			node = ts_tree_cursor_current_node(cursor);
+		}
+		uint32_t start = ts_node_start_byte(node);
+		uint32_t end = ts_node_end_byte(node);
+		if (start > from || end < to || end - start <= to - from) {
+			ascending = true;
+			if (!ts_tree_cursor_goto_parent(cursor)) return false;
+			continue;
+		}
+		if (ascending || ts_tree_cursor_goto_first_child_for_byte(cursor, from) < 0) return true;
+	}
+}
+
+static TSNode ancestorOf(TSTree* tree, uint32_t from, uint32_t to, bool* found) {
+	TSTreeCursor cursor = ts_tree_cursor_new(ts_tree_root_node(tree));
+	*found = enclosingLarger(&cursor, from, to);
+	TSNode left = ts_tree_cursor_current_node(&cursor);
+	TSNode chosen = left;
+	if (*found && ts_node_end_byte(left) == from) {
+		bool hasRight = false;
+		TSNode right = left;
+		while (!ts_tree_cursor_goto_next_sibling(&cursor)) {
+			if (!ts_tree_cursor_goto_parent(&cursor)) break;
+		}
+		while (ts_node_start_byte(ts_tree_cursor_current_node(&cursor)) == from) {
+			right = ts_tree_cursor_current_node(&cursor);
+			hasRight = true;
+			if (!ts_tree_cursor_goto_first_child(&cursor)) break;
+		}
+		if (hasRight && (ts_node_is_named(right) || !ts_node_is_named(left))) chosen = right;
+	}
+	ts_tree_cursor_delete(&cursor);
+	return chosen;
+}
+
+int64_t medicSyntaxAncestor(void* syntax, int32_t from, int32_t to, int32_t* start, int32_t* end, int32_t* named,
+	uint8_t* kind, int64_t cap) {
+	Syntax* s = syntax;
+	if (!s->tree) return -1;
+	bool found = false;
+	TSNode node = ancestorOf(s->tree, (uint32_t)from, (uint32_t)to, &found);
+	if (!found) return -1;
+	*start = (int32_t)ts_node_start_byte(node);
+	*end = (int32_t)ts_node_end_byte(node);
+	*named = ts_node_is_named(node) ? 1 : 0;
+	const char* type = ts_node_type(node);
+	return copied(type, (uint32_t)strlen(type), kind, cap);
+}

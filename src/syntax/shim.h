@@ -18,5 +18,7 @@ int64_t medicSyntaxPredicates(void* syntax, int32_t pattern, int32_t* steps, int
 void medicSyntaxHighlight(void* syntax, int32_t from, int32_t to);
 int32_t medicSyntaxNextCapture(void* syntax, int32_t* start, int32_t* end, int32_t* capture, int32_t* pattern);
 int32_t medicSyntaxMatchCapture(void* syntax, int32_t capture, int32_t* start, int32_t* end);
+int64_t medicSyntaxAncestor(void* syntax, int32_t from, int32_t to, int32_t* start, int32_t* end, int32_t* named,
+	uint8_t* kind, int64_t cap);
 
 #endif

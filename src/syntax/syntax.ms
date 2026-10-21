@@ -8,6 +8,9 @@
 
 import { Handle } from "std/ffi";
 import { Document } from "../model/document";
+import { Ancestor, Expander, SyntaxNode } from "../model/expand";
+import { Editor } from "../model/editor";
+import { single } from "../model/selection";
 import { isTrail } from "../text/clusters";
 import { HIGHLIGHTS } from "./highlights";
 import { luaMatches } from "./luaPattern";
@@ -55,6 +58,15 @@ extern function matchCapture(
 	out start: int32,
 	out end: int32,
 ): int32 from "medicSyntaxMatchCapture";
+extern function copyAncestor(
+	syntax: Ptr<void>,
+	from: int32,
+	to: int32,
+	out start: int32,
+	out end: int32,
+	out named: int32,
+	into: Span<uint8>,
+): int64 from "medicSyntaxAncestor";
 
 const CHUNK: int32 = 4096;
 const STEP_DONE: int32 = 0;
@@ -275,6 +287,26 @@ export class Syntax {
 		}
 		return tones;
 	}
+
+	ancestor(doc: Document, from: int32, to: int32): SyntaxNode | null {
+		this.sync(doc);
+		let start = 0;
+		let end = 0;
+		let named = 0;
+		let kind: Vec<uint8> = new Array(64);
+		let length = copyAncestor(this.handle, from, to, out start, out end, out named, kind);
+		if (length < 0) { return null; }
+		if (length > kind.length) {
+			kind = new Array(length as int32);
+			length = copyAncestor(this.handle, from, to, out start, out end, out named, kind);
+		}
+		const name = kind[0..(length as int32)].asString();
+		return { from: start, to: end, named: named != 0, kind: name };
+	}
+
+	ancestors(doc: Document): Ancestor {
+		return (from: int32, to: int32): SyntaxNode | null => this.ancestor(doc, from, to);
+	}
 }
 
 test "the grammar covers the MetaScript file types" {
@@ -335,5 +367,51 @@ test "an edit reparses incrementally and keeps tones right after it" {
 	assert tones[0] == Tone.Keyword;
 	assert tones[4] == Tone.Keyword;
 	assert tones[10] == Tone.Number;
+	syntax.close();
+}
+
+function grownTexts(text: string, at: int32): string[] {
+	const e = new Editor(new Document(text));
+	e.select(single(at));
+	const syntax = new Syntax();
+	const expander = new Expander(syntax.ancestors(e.doc));
+	const texts: string[] = [];
+	while (expander.grow(e)) {
+		const s = e.selections.ranges[0];
+		texts.push(e.doc.slice(s.start(), s.end()));
+	}
+	syntax.close();
+	return texts;
+}
+
+test "growing walks out one named node at a time and stops below the whole program" {
+	const texts = grownTexts("const total = add(first, second) + 1;", 27);
+	assert texts.join("|") == "second|(first, second)|add(first, second)|add(first, second) + 1|" +
+		"const total = add(first, second) + 1;";
+}
+
+test "a caret takes the token after it, or the one before it across a space" {
+	assert grownTexts("f(a);", 2)[0] == "a";
+	assert grownTexts("f(a );", 3)[0] == "a";
+	assert grownTexts("f(a);", 3)[0] == "(a)";
+}
+
+test "inside a string the word under the caret comes first, by bytes" {
+	const texts = grownTexts("let s = \"hé wörld\";
+", 14);
+	assert texts[0] == "wörld";
+	assert texts[1] == "\"hé wörld\"";
+}
+
+test "shrinking after growing over the real tree returns each earlier selection" {
+	const e = new Editor(new Document("g(h(x));"));
+	e.select(single(4));
+	const syntax = new Syntax();
+	const expander = new Expander(syntax.ancestors(e.doc));
+	for (let i = 0; i < 5; i++) { assert expander.grow(e); }
+	assert e.doc.slice(e.selections.ranges[0].start(), e.selections.ranges[0].end()) == "g(h(x))";
+	assert expander.shrink(e);
+	assert expander.shrink(e);
+	assert e.doc.slice(e.selections.ranges[0].start(), e.selections.ranges[0].end()) == "h(x)";
 	syntax.close();
 }
