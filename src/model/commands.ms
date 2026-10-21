@@ -69,6 +69,7 @@ export interface Context {
 	codeActions: () => void;
 	toggleInlayHints: () => void;
 	outline: () => void;
+	palette: () => void;
 	navigate: (back: boolean) => void;
 	expander: Expander;
 	scrollRows: (rows: int32) => void;
@@ -1043,6 +1044,7 @@ export function commands(): Map<string, Command> {
 	table.set("codeActions", (e: Editor, cx: Context): void => { cx.codeActions(); });
 	table.set("toggleInlayHints", (e: Editor, cx: Context): void => { cx.toggleInlayHints(); });
 	table.set("outline", (e: Editor, cx: Context): void => { cx.outline(); });
+	table.set("palette", (e: Editor, cx: Context): void => { cx.palette(); });
 	table.set("goBack", (e: Editor, cx: Context): void => { cx.navigate(true); });
 	table.set("goForward", (e: Editor, cx: Context): void => { cx.navigate(false); });
 	table.set("expandSelection", (e: Editor, cx: Context): void => { cx.expander.grow(e); });
@@ -1162,6 +1164,7 @@ function runner(
 		codeActions: (): void => {},
 		toggleInlayHints: (): void => {},
 		outline: (): void => {},
+		palette: (): void => {},
 		navigate: (back: boolean): void => {},
 		expander: new Expander(null),
 		scrollRows: (rows: int32): void => { scrolled.push(rows); },

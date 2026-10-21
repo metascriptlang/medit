@@ -75,6 +75,14 @@ export class Keymap {
 		for (const [sequence, command] of this.bindings) { out.push(command); }
 		return out;
 	}
+
+	firstKeys(): Map<string, string> {
+		const out = new Map<string, string>();
+		for (const [sequence, command] of this.bindings) {
+			if (!out.has(command)) { out.set(command, sequence); }
+		}
+		return out;
+	}
 }
 
 export function defaultKeymap(): Keymap {
@@ -125,6 +133,7 @@ export function defaultKeymap(): Keymap {
 		["ctrl+Space", "showCompletions"], ["ctrl+i", "showSignatureHelp"], ["ctrl+shift+Space", "showSignatureHelp"],
 		["alt+shift+f", "format"], ["ctrl+k ctrl+f", "formatSelections"],
 		["F2", "rename"], ["shift+F12", "findReferences"], ["alt+shift+F12", "findReferences"],
+		["F1", "palette"], ["ctrl+shift+p", "palette"],
 		["ctrl+shift+o", "outline"], ["ctrl+.", "codeActions"], ["ctrl+shift+;", "toggleInlayHints"],
 		["alt+ArrowLeft", "goBack"], ["alt+ArrowRight", "goForward"],
 		["alt+shift+ArrowRight", "expandSelection"], ["alt+shift+ArrowLeft", "shrinkSelection"],
@@ -259,4 +268,14 @@ test "the default map binds editing keys" {
 	assert r.outcome == Outcome.Run;
 	assert r.command == "redo";
 	assert m.feed(press("a", false, false)).outcome == Outcome.Unbound;
+}
+
+test "F1 and ctrl+shift+p open the palette, and a command's first key is the one bound first" {
+	const m = defaultKeymap();
+	assert chord(m, press("F1", false, false)) == "palette";
+	assert chord(m, press("P", true, true)) == "palette";
+	const first = m.firstKeys();
+	assert first.get("palette") == "F1" && first.get("selectAllOccurrences") == "ctrl+shift+l";
+	assert first.get("skipToNextOccurrence") == "ctrl+k ctrl+d" && first.get("copy") == "ctrl+c";
+	assert !first.has("confirmList");
 }
