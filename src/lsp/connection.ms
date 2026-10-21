@@ -1,5 +1,5 @@
 import { Document } from "../model/document";
-import { Server } from "./server";
+import { Away, Server } from "./server";
 import { Link, Session } from "./session";
 import { sameFile } from "./uri";
 
@@ -63,6 +63,8 @@ export class Connection {
 
 	watch(handler: () => void): void { this.watchers.push(handler); }
 
+	editsElsewhere(apply: (files: Away[]) => string | null): void { this.server.editsElsewhere(apply); }
+
 	private pump(): void {
 		const bytes = this.link.take();
 		if (bytes.byteLength > 0) { this.server.receive(bytes); }
@@ -91,7 +93,7 @@ when (testBuild) {
 	import { framed } from "./rpc";
 	import { Edit } from "../model/document";
 	import { Place } from "../model/references";
-	import { Span } from "./server";
+	import { Span, editsIn } from "./server";
 
 	class Pipe {
 		sent: string[] = [];
@@ -205,7 +207,7 @@ when (testBuild) {
 		assert pipe.count("textDocument/didClose") == 1;
 	}
 
-	test "a workspace edit reaches every open document it names and counts the files that are not open" {
+	test "a workspace edit reaches every open document it names and hands over the files that are not open" {
 		const pipe = new Pipe();
 		const connection = new Connection(pipe.link(), "msc lsp", null, null);
 		const da = new Document("ab = ab;\n");
@@ -225,12 +227,19 @@ when (testBuild) {
 			othersSeen.push(others);
 			return null;
 		});
+		const away: Away[] = [];
+		connection.editsElsewhere((files: Away[]): string | null => {
+			for (const f of files) { away.push(f); }
+			return null;
+		});
 		pipe.deliver(INITIALIZED);
 		const edit = (line: int32, from: int32, to: int32): string => `{"range":${at(line, from, to)},"newText":"cd"}`;
 		const changes = `{"changes":{"file:///a.ms":[${edit(0, 0, 2)},${edit(0, 5, 7)}],"file:///b.ms":[${edit(0, 4, 6)}],"file:///c.ms":[${edit(1, 0, 2)}]}}`;
 		pipe.deliver(`{"jsonrpc":"2.0","id":50,"method":"workspace/applyEdit","params":{"edit":${changes}}}`);
 		assert gotA.length == 2 && gotA[1].from == 5 && gotB.length == 1 && gotB[0].from == 4;
-		assert othersSeen.length == 2 && othersSeen[0] == 1 && othersSeen[1] == 1;
+		assert othersSeen.length == 2 && othersSeen[0] == 3 && othersSeen[1] == 3;
+		assert away.length == 1 && away[0].uri == "file:///c.ms" && away[0].edits.length == 1 && away[0].edits[0].range.start.line == 1;
+		assert editsIn(new Document("x\nab\n"), away[0])[0].from == 2;
 		assert pipe.sent[pipe.sent.length - 1].includes("\"id\":50,\"result\":{\"applied\":true}");
 		let mine: Edit[] = [];
 		let counted: int32 = -1;
@@ -239,7 +248,7 @@ when (testBuild) {
 			counted = others;
 		});
 		pipe.deliver(`{"jsonrpc":"2.0","id":${id},"result":${changes}}`);
-		assert mine.length == 2 && counted == 1 && gotA.length == 2 && gotB.length == 2;
+		assert mine.length == 2 && counted == 2 && gotA.length == 2 && gotB.length == 2;
 		b.applying((edits: Edit[], others: int32): string | null => "no");
 		const refusedId = a.rename(1, "cd", (edits: Edit[] | null, others: int32, error: string | null): void => {
 			mine = edits === null ? [] : edits as Edit[];
@@ -247,6 +256,10 @@ when (testBuild) {
 		});
 		pipe.deliver(`{"jsonrpc":"2.0","id":${refusedId},"result":${changes}}`);
 		assert mine.length == 0 && counted == 0;
+		connection.editsElsewhere((files: Away[]): string | null => "cannot read c.ms");
+		const before = gotA.length;
+		pipe.deliver(`{"jsonrpc":"2.0","id":52,"method":"workspace/applyEdit","params":{"edit":${changes}}}`);
+		assert gotA.length == before && pipe.sent[pipe.sent.length - 1].includes("\"id\":52,\"result\":{\"applied\":false");
 		pipe.deliver(`{"jsonrpc":"2.0","id":51,"method":"workspace/applyEdit","params":{"edit":{"changes":{"file:///c.ms":[${edit(0, 0, 1)}]}}}}`);
 		assert pipe.sent[pipe.sent.length - 1].includes("\"id\":51,\"result\":{\"applied\":false");
 	}

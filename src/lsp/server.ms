@@ -9,7 +9,7 @@ import { Inlay } from "../model/inlays";
 import { refined } from "../model/patch";
 import { Client, NotificationHandler, Reply, failed, quoted } from "./client";
 import { DocumentSync, SyncKind } from "./sync";
-import { Position, Range, byteColumn, positionOf } from "./position";
+import { Position, Range, byteColumn, offsetOf, positionOf } from "./position";
 import { isKind } from "./json";
 import { sameFile } from "./uri";
 import { TAB_SIZE } from "../text/clusters";
@@ -78,6 +78,29 @@ struct TextDocumentId {
 struct PositionParams {
 	textDocument: TextDocumentId;
 	position: Position;
+}
+
+export struct AwayEdit {
+	range: Range;
+	text: string;
+}
+
+export struct Away {
+	uri: string;
+	edits: AwayEdit[];
+}
+
+export function editsIn(doc: Document, away: Away): Edit[] {
+	return refined(doc, away.edits.map((e: AwayEdit): Edit => ({
+		from: offsetOf(doc, e.range.start),
+		to: offsetOf(doc, e.range.end),
+		text: e.text.split("\r\n").join("\n"),
+	})));
+}
+
+function notOpen(files: Away[]): string | null {
+	const n = files.length;
+	return `the edit changes ${n} file${n == 1 ? " that is" : "s that are"} not open`;
 }
 
 function rangeOf(v: JsonValue): Range {
@@ -245,6 +268,7 @@ export class Server {
 	private syncKind: SyncKind = SyncKind.Full;
 	private saveText: boolean = false;
 	private capabilities: JsonValue = jsonNull();
+	private elsewhere: (files: Away[]) => string | null = notOpen;
 
 	constructor(write: (bytes: string) => void, complain: (message: string) => void) {
 		this.client = new Client(write, complain);
@@ -698,8 +722,8 @@ export class Server {
 		}
 		const changes = edit.getDynamicField("changes");
 		let mine: Edit[] = [];
-		let others = 0;
 		const handed: Array<[Opened, Edit[]]> = [];
+		const away: Away[] = [];
 		const keys: string[] = match (changes.kind) {
 			JsonKind.Object => changes.keys,
 			_ => [],
@@ -708,7 +732,12 @@ export class Server {
 			const list = changes.getDynamicField(key);
 			const i = this.held(seen, key);
 			if (i < 0) {
-				if (list.length() > 0) { others += 1; }
+				const edits: AwayEdit[] = [];
+				for (let k = 0; k < list.length(); k++) {
+					const e = list.at(k);
+					edits.push({ range: rangeOf(e.getDynamicField("range")), text: e.getDynamicField("newText").asString() });
+				}
+				if (edits.length > 0) { away.push({ uri: key, edits }); }
 				continue;
 			}
 			const o = seen[i][0];
@@ -720,10 +749,14 @@ export class Server {
 			if (o.doc === asked) { mine = edits as Edit[]; }
 			else if ((edits as Edit[]).length > 0) { handed.push([o, edits as Edit[]]); }
 		}
-		if (asked === null && handed.length == 0 && others > 0) {
-			done(null, 0, `the edit changes ${others} file${others == 1 ? "" : "s"} that ${others == 1 ? "is" : "are"} not open`);
-			return;
+		if (away.length > 0) {
+			const refused = this.elsewhere(away);
+			if (refused !== null) {
+				done(null, 0, refused as string);
+				return;
+			}
 		}
+		const others = (handed.length + away.length) as int32;
 		for (const [o, edits] of handed) {
 			const refused = o.apply(edits, others);
 			if (refused !== null) {
@@ -819,6 +852,8 @@ export class Server {
 	// Who applies the edits a workspace edit makes to this open document, other than the one a
 	// request asked about: `apply` gets them and how many files that are not open the edit
 	// changes, and gives back why it did not apply them, or null.
+	editsElsewhere(apply: (files: Away[]) => string | null): void { this.elsewhere = apply; }
+
 	applyEdits(doc: Document, apply: (edits: Edit[], others: int32) => string | null): void {
 		const o = this.find(doc);
 		if (o !== null) { (o as Opened).apply = apply; }
@@ -1177,7 +1212,7 @@ when (testBuild) {
 		assert got === null && error === null;
 	}
 
-	test "a rename gives this document's edits and counts the other documents it edits" {
+	test "a rename gives this document's edits and hands the files not open to the workspace, which may refuse" {
 		const [server, wire, d] = completing("ab = ab;\n");
 		let got: Edit[] = [];
 		let others = -1;
@@ -1192,8 +1227,18 @@ when (testBuild) {
 		assert sent.includes("\"method\":\"textDocument/rename\"") && sent.includes("\"newName\":\"cd\"");
 		const edit = (from: int32, to: int32): string =>
 			`{"range":{"start":{"line":0,"character":${from}},"end":{"line":0,"character":${to}}},"newText":"cd"}`;
-		server.receive(reply(id, `{"changes":{"file:///b.ms":[${edit(0, 2)}],"file:///a.ms":[${edit(0, 2)},${edit(5, 7)}],"file:///c.ms":[]}}`));
+		const answer = `{"changes":{"file:///b.ms":[${edit(0, 2)}],"file:///a.ms":[${edit(0, 2)},${edit(5, 7)}],"file:///c.ms":[]}}`;
+		server.receive(reply(id, answer));
+		assert got.length == 0 && error == "the edit changes 1 file that is not open";
+		const handed: string[] = [];
+		server.editsElsewhere((files: Away[]): string | null => {
+			for (const f of files) { handed.push(f.uri); }
+			return null;
+		});
+		const again = server.rename(d, 1, "cd", keep);
+		server.receive(reply(again, answer));
 		assert got.length == 2 && got[1].from == 5 && got[1].text == "cd" && others == 1 && error === null;
+		assert handed.length == 1 && handed[0] == "file:///b.ms";
 		const did = server.rename(d, 1, "cd", keep);
 		server.receive(reply(did, "{\"documentChanges\":[]}"));
 		assert error !== null;
@@ -1262,6 +1307,7 @@ when (testBuild) {
 			others = o;
 			errors.push(x);
 		};
+		server.editsElsewhere((files: Away[]): string | null => null);
 		const rid = server.applyAction(d, f[1], keep);
 		const resolving = wire.sent[wire.sent.length - 1];
 		assert resolving.includes("\"method\":\"codeAction/resolve\"") && resolving.includes("\"data\":1");
