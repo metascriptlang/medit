@@ -82,6 +82,13 @@ function enclosingIn(bytes: Readonly<Span<uint8>>, from: int32, to: int32): Brac
 	return best;
 }
 
+export function openerBefore(this doc: Document, at: int32, close: string): int32 {
+	const lo = doc.backToBoundary(Math.max(0, at - BRACKET_REACH));
+	const bytes = (doc.slice(lo, at) + close).asBytes();
+	const open = openOf(bytes, bytes.length as int32 - 1);
+	return open == NONE ? NONE : open + lo;
+}
+
 export function enclosingBrackets(this doc: Document, from: int32, to: int32): BracketPair | null {
 	if (to - from > BRACKET_REACH) { return null; }
 	const lo = doc.backToBoundary(Math.max(0, from - BRACKET_REACH));
