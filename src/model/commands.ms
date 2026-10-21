@@ -44,6 +44,7 @@ export interface Context {
 	showSignatureHelp: () => void;
 	cycleSignature: (forward: boolean) => void;
 	hideSignatureHelp: () => void;
+	format: (selections: boolean) => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -667,6 +668,8 @@ export function commands(): Map<string, Command> {
 	table.set("signaturePrevious", (e: Editor, cx: Context): void => { cx.cycleSignature(false); });
 	table.set("signatureNext", (e: Editor, cx: Context): void => { cx.cycleSignature(true); });
 	table.set("hideSignatureHelp", (e: Editor, cx: Context): void => { cx.hideSignatureHelp(); });
+	table.set("format", (e: Editor, cx: Context): void => { cx.format(false); });
+	table.set("formatSelections", (e: Editor, cx: Context): void => { cx.format(true); });
 	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -769,6 +772,7 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		showSignatureHelp: (): void => {},
 		cycleSignature: (forward: boolean): void => {},
 		hideSignatureHelp: (): void => {},
+		format: (selections: boolean): void => {},
 	};
 	return (e: Editor, name: string): void => {
 		const command = table.get(name);
