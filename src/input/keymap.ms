@@ -108,7 +108,7 @@ export function defaultKeymap(): Keymap {
 		["ctrl+f", "find"], ["ctrl+g", "goToLine"], ["ctrl+h", "replace"], ["F3", "findNext"], ["shift+F3", "findPrev"],
 		["ctrl+Insert", "copy"], ["shift+Delete", "cut"], ["shift+Insert", "paste"],
 		["ctrl+k ctrl+i", "hover"], ["F12", "goToDefinition"], ["F8", "nextDiagnostic"], ["shift+F8", "prevDiagnostic"],
-		["ctrl+Space", "showCompletions"],
+		["ctrl+Space", "showCompletions"], ["ctrl+i", "showSignatureHelp"], ["ctrl+shift+Space", "showSignatureHelp"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;
@@ -125,6 +125,18 @@ export function completionKeymap(): Keymap {
 		["shift+Enter", "confirmCompletionReplace"], ["Escape", "hideCompletions"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
+	return keymap;
+}
+
+// Keys that act on signature help while it shows and the completion menu does not; the arrows
+// only while it holds several signatures.
+export function signatureKeymap(several: boolean): Keymap {
+	const keymap = new Keymap();
+	keymap.bind("Escape", "hideSignatureHelp");
+	if (several) {
+		keymap.bind("ArrowUp", "signaturePrevious");
+		keymap.bind("ArrowDown", "signatureNext");
+	}
 	return keymap;
 }
 

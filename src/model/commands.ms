@@ -41,6 +41,9 @@ export interface Context {
 	completionMenu: (move: MenuMove) => void;
 	confirmCompletion: (replace: boolean | null) => void;
 	hideCompletions: () => void;
+	showSignatureHelp: () => void;
+	cycleSignature: (forward: boolean) => void;
+	hideSignatureHelp: () => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -660,6 +663,10 @@ export function commands(): Map<string, Command> {
 	table.set("confirmCompletion", (e: Editor, cx: Context): void => { cx.confirmCompletion(null); });
 	table.set("confirmCompletionReplace", (e: Editor, cx: Context): void => { cx.confirmCompletion(true); });
 	table.set("hideCompletions", (e: Editor, cx: Context): void => { cx.hideCompletions(); });
+	table.set("showSignatureHelp", (e: Editor, cx: Context): void => { cx.showSignatureHelp(); });
+	table.set("signaturePrevious", (e: Editor, cx: Context): void => { cx.cycleSignature(false); });
+	table.set("signatureNext", (e: Editor, cx: Context): void => { cx.cycleSignature(true); });
+	table.set("hideSignatureHelp", (e: Editor, cx: Context): void => { cx.hideSignatureHelp(); });
 	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -713,12 +720,12 @@ function editorAt(text: string, offsets: Span<int32>): Editor {
 }
 
 when (testBuild) {
-	import { completionKeymap, defaultKeymap } from "../input/keymap";
+	import { completionKeymap, defaultKeymap, signatureKeymap } from "../input/keymap";
 
 	test "every binding names a command" {
 		const table = commands();
 		const missing: string[] = [];
-		for (const name of [...defaultKeymap().commands(), ...completionKeymap().commands()]) {
+		for (const name of [...defaultKeymap().commands(), ...completionKeymap().commands(), ...signatureKeymap(true).commands()]) {
 			if (!table.has(name)) { missing.push(name); }
 		}
 		assert missing.length == 0;
@@ -759,6 +766,9 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		completionMenu: (move: MenuMove): void => {},
 		confirmCompletion: (replace: boolean | null): void => {},
 		hideCompletions: (): void => {},
+		showSignatureHelp: (): void => {},
+		cycleSignature: (forward: boolean): void => {},
+		hideSignatureHelp: (): void => {},
 	};
 	return (e: Editor, name: string): void => {
 		const command = table.get(name);
