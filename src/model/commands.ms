@@ -22,6 +22,7 @@ import { MenuMove } from "./completer";
 import { Expander } from "./expand";
 import { Folds, lineAfter, shownEnd, shownLine } from "./folds";
 import { BlockComment, DocComment } from "./language";
+import { Workspace, noWorkspace } from "./workspace";
 import { acceptLater } from "./completion";
 import { savedEdits } from "./format";
 import {
@@ -74,6 +75,7 @@ export interface Context {
 	toggleInlayHints: () => void;
 	outline: () => void;
 	palette: () => void;
+	workspace: Workspace;
 	navigate: (back: boolean) => void;
 	expander: Expander;
 	folds: Folds;
@@ -1155,6 +1157,23 @@ export function commands(): Map<string, Command> {
 	table.set("toggleInlayHints", (e: Editor, cx: Context): void => { cx.toggleInlayHints(); });
 	table.set("outline", (e: Editor, cx: Context): void => { cx.outline(); });
 	table.set("palette", (e: Editor, cx: Context): void => { cx.palette(); });
+	table.set("quickOpen", (e: Editor, cx: Context): void => { cx.workspace.quickOpen(); });
+	table.set("closeTab", (e: Editor, cx: Context): void => { cx.workspace.closeTab(); });
+	table.set("reopenClosedTab", (e: Editor, cx: Context): void => { cx.workspace.reopenClosed(); });
+	table.set("nextTab", (e: Editor, cx: Context): void => { cx.workspace.stepTab(true); });
+	table.set("previousTab", (e: Editor, cx: Context): void => { cx.workspace.stepTab(false); });
+	table.set("activateTab1", (e: Editor, cx: Context): void => { cx.workspace.activateTab(0); });
+	table.set("activateTab2", (e: Editor, cx: Context): void => { cx.workspace.activateTab(1); });
+	table.set("activateTab3", (e: Editor, cx: Context): void => { cx.workspace.activateTab(2); });
+	table.set("activateTab4", (e: Editor, cx: Context): void => { cx.workspace.activateTab(3); });
+	table.set("activateTab5", (e: Editor, cx: Context): void => { cx.workspace.activateTab(4); });
+	table.set("activateTab6", (e: Editor, cx: Context): void => { cx.workspace.activateTab(5); });
+	table.set("activateTab7", (e: Editor, cx: Context): void => { cx.workspace.activateTab(6); });
+	table.set("activateTab8", (e: Editor, cx: Context): void => { cx.workspace.activateTab(7); });
+	table.set("activateTab9", (e: Editor, cx: Context): void => { cx.workspace.activateTab(8); });
+	table.set("lastTab", (e: Editor, cx: Context): void => { cx.workspace.activateTab(-1); });
+	table.set("switchTabs", (e: Editor, cx: Context): void => { cx.workspace.switchTabs(false); });
+	table.set("switchTabsBack", (e: Editor, cx: Context): void => { cx.workspace.switchTabs(true); });
 	table.set("goBack", (e: Editor, cx: Context): void => { cx.navigate(true); });
 	table.set("goForward", (e: Editor, cx: Context): void => { cx.navigate(false); });
 	table.set("expandSelection", (e: Editor, cx: Context): void => { cx.expander.grow(e); });
@@ -1275,6 +1294,7 @@ function runner(
 		toggleInlayHints: (): void => {},
 		outline: (): void => {},
 		palette: (): void => {},
+		workspace: noWorkspace(),
 		navigate: (back: boolean): void => {},
 		expander: new Expander(null),
 		folds: new Folds(null),

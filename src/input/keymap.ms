@@ -140,6 +140,12 @@ export function defaultKeymap(): Keymap {
 		["alt+shift+f", "format"], ["ctrl+k ctrl+f", "formatSelections"],
 		["F2", "rename"], ["shift+F12", "findReferences"], ["alt+shift+F12", "findReferences"],
 		["F1", "palette"], ["ctrl+shift+p", "palette"],
+		["ctrl+p", "quickOpen"], ["ctrl+e", "quickOpen"],
+		["ctrl+w", "closeTab"], ["ctrl+F4", "closeTab"], ["ctrl+shift+t", "reopenClosedTab"],
+		["ctrl+PageDown", "nextTab"], ["ctrl+PageUp", "previousTab"],
+		["ctrl+Tab", "switchTabs"], ["ctrl+shift+Tab", "switchTabsBack"],
+		["alt+1", "activateTab1"], ["alt+2", "activateTab2"], ["alt+3", "activateTab3"], ["alt+4", "activateTab4"], ["alt+5", "activateTab5"], ["alt+6", "activateTab6"], ["alt+7", "activateTab7"], ["alt+8", "activateTab8"], ["alt+9", "activateTab9"],
+		["alt+0", "lastTab"],
 		["ctrl+shift+o", "outline"], ["ctrl+.", "codeActions"], ["ctrl+shift+;", "toggleInlayHints"],
 		["alt+ArrowLeft", "goBack"], ["alt+ArrowRight", "goForward"],
 		["alt+shift+ArrowRight", "expandSelection"], ["alt+shift+ArrowLeft", "shrinkSelection"],
@@ -284,6 +290,17 @@ test "F1 and ctrl+shift+p open the palette, and a command's first key is the one
 	assert first.get("palette") == "F1" && first.get("selectAllOccurrences") == "ctrl+shift+l";
 	assert first.get("skipToNextOccurrence") == "ctrl+k ctrl+d" && first.get("copy") == "ctrl+c";
 	assert !first.has("confirmList");
+}
+
+test "ctrl+p opens a file, ctrl+w closes the tab, ctrl+tab switches and alt+digit picks a tab" {
+	const m = defaultKeymap();
+	assert chord(m, press("p", true, false)) == "quickOpen";
+	assert chord(m, press("w", true, false)) == "closeTab";
+	assert chord(m, press("T", true, true)) == "reopenClosedTab";
+	assert chord(m, press("Tab", true, false)) == "switchTabs" && chord(m, press("Tab", true, true)) == "switchTabsBack";
+	assert chord(m, press("PageDown", true, false)) == "nextTab";
+	assert chord(m, { key: "3", ctrl: false, alt: true, shift: false, meta: false }) == "activateTab3";
+	assert chord(m, { key: "0", ctrl: false, alt: true, shift: false, meta: false }) == "lastTab";
 }
 
 test "fold keys: ctrl+shift+brackets fold and unfold, the rest follow ctrl+k" {
