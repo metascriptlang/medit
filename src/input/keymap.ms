@@ -110,6 +110,7 @@ export function defaultKeymap(): Keymap {
 		["ctrl+k ctrl+i", "hover"], ["F12", "goToDefinition"], ["F8", "nextDiagnostic"], ["shift+F8", "prevDiagnostic"],
 		["ctrl+Space", "showCompletions"], ["ctrl+i", "showSignatureHelp"], ["ctrl+shift+Space", "showSignatureHelp"],
 		["alt+shift+f", "format"], ["ctrl+k ctrl+f", "formatSelections"],
+		["F2", "rename"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;
