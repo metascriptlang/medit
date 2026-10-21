@@ -28,7 +28,7 @@ import { Renamer, Renaming } from "../../../../model/rename";
 import { Place, References } from "../../../../model/references";
 import { Outline, OutlineItem } from "../../../../model/outline";
 import { NavHistory, Spot } from "../../../../model/history";
-import { KeyPress, Outcome, completionKeymap, defaultKeymap, referencesKeymap, signatureKeymap } from "../../../../input/keymap";
+import { KeyPress, Outcome, completionKeymap, defaultKeymap, listKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
@@ -121,7 +121,7 @@ export function EditorPane(props: {
 	let renameText = "";
 	let placeRename: () => void = (): void => {};
 	let renameChanged: () => void = (): void => {};
-	const refKeys = referencesKeymap();
+	const listKeys = listKeymap();
 	const [listed, setListed] = createSignal<boolean>(false);
 	const [listBox, setListBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
 	const [listPick, setListPick] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
@@ -736,9 +736,9 @@ export function EditorPane(props: {
 			completer.hide();
 			references.find();
 		},
-		moveReference: (move: MenuMove): void => { references.move(move); },
-		confirmReference: (): void => { references.confirm(); },
-		hideReferences: (): void => { references.dismiss(); },
+		moveList: (move: MenuMove): void => { references.move(move); },
+		confirmList: (): void => { references.confirm(); },
+		hideList: (): void => { references.dismiss(); },
 		outline: (): void => {
 			completer.hide();
 			references.close();
@@ -814,7 +814,7 @@ export function EditorPane(props: {
 		notice = null;
 		const key: KeyPress = { key: e.key, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
 		if (references.shown() && keymap.pendingChords() == "") {
-			const m = refKeys.feed(key);
+			const m = listKeys.feed(key);
 			if (m.outcome == Outcome.Run) {
 				run(m.command);
 				return;

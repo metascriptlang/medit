@@ -131,13 +131,13 @@ export function completionKeymap(): Keymap {
 	return keymap;
 }
 
-// Keys that act on the reference list while it shows.
-export function referencesKeymap(): Keymap {
+// Keys that act on the list below the cursor, of references or code actions, while it shows.
+export function listKeymap(): Keymap {
 	const keymap = new Keymap();
 	const bindings: Array<[string, string]> = [
-		["ArrowUp", "referencePrevious"], ["ArrowDown", "referenceNext"],
-		["PageUp", "referenceFirst"], ["PageDown", "referenceLast"],
-		["Enter", "confirmReference"], ["NumpadEnter", "confirmReference"], ["Escape", "hideReferences"],
+		["ArrowUp", "listPrevious"], ["ArrowDown", "listNext"],
+		["PageUp", "listFirst"], ["PageDown", "listLast"],
+		["Enter", "confirmList"], ["NumpadEnter", "confirmList"], ["Escape", "hideList"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;

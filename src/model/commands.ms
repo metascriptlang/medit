@@ -47,9 +47,9 @@ export interface Context {
 	format: (selections: boolean) => void;
 	rename: () => void;
 	findReferences: () => void;
-	moveReference: (move: MenuMove) => void;
-	confirmReference: () => void;
-	hideReferences: () => void;
+	moveList: (move: MenuMove) => void;
+	confirmList: () => void;
+	hideList: () => void;
 	outline: () => void;
 	navigate: (back: boolean) => void;
 }
@@ -679,12 +679,12 @@ export function commands(): Map<string, Command> {
 	table.set("formatSelections", (e: Editor, cx: Context): void => { cx.format(true); });
 	table.set("rename", (e: Editor, cx: Context): void => { cx.rename(); });
 	table.set("findReferences", (e: Editor, cx: Context): void => { cx.findReferences(); });
-	table.set("referencePrevious", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.Previous); });
-	table.set("referenceNext", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.Next); });
-	table.set("referenceFirst", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.First); });
-	table.set("referenceLast", (e: Editor, cx: Context): void => { cx.moveReference(MenuMove.Last); });
-	table.set("confirmReference", (e: Editor, cx: Context): void => { cx.confirmReference(); });
-	table.set("hideReferences", (e: Editor, cx: Context): void => { cx.hideReferences(); });
+	table.set("listPrevious", (e: Editor, cx: Context): void => { cx.moveList(MenuMove.Previous); });
+	table.set("listNext", (e: Editor, cx: Context): void => { cx.moveList(MenuMove.Next); });
+	table.set("listFirst", (e: Editor, cx: Context): void => { cx.moveList(MenuMove.First); });
+	table.set("listLast", (e: Editor, cx: Context): void => { cx.moveList(MenuMove.Last); });
+	table.set("confirmList", (e: Editor, cx: Context): void => { cx.confirmList(); });
+	table.set("hideList", (e: Editor, cx: Context): void => { cx.hideList(); });
 	table.set("outline", (e: Editor, cx: Context): void => { cx.outline(); });
 	table.set("goBack", (e: Editor, cx: Context): void => { cx.navigate(true); });
 	table.set("goForward", (e: Editor, cx: Context): void => { cx.navigate(false); });
@@ -793,9 +793,9 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		format: (selections: boolean): void => {},
 		rename: (): void => {},
 		findReferences: (): void => {},
-		moveReference: (move: MenuMove): void => {},
-		confirmReference: (): void => {},
-		hideReferences: (): void => {},
+		moveList: (move: MenuMove): void => {},
+		confirmList: (): void => {},
+		hideList: (): void => {},
 		outline: (): void => {},
 		navigate: (back: boolean): void => {},
 	};
