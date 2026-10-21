@@ -121,6 +121,12 @@ export function defaultKeymap(): Keymap {
 		["Enter", "newline"], ["shift+Enter", "newline"], ["NumpadEnter", "newline"],
 		["Tab", "tab"], ["shift+Tab", "outdent"],
 		["ctrl+]", "indent"], ["ctrl+[", "outdent"],
+		["ctrl+shift+[", "fold"], ["ctrl+shift+]", "unfoldLines"], ["ctrl+k ctrl+l", "toggleFold"],
+		["ctrl+k ctrl+[", "foldRecursive"], ["ctrl+k ctrl+]", "unfoldRecursive"],
+		["ctrl+k ctrl+0", "foldAll"], ["ctrl+k ctrl+j", "unfoldAll"],
+		["ctrl+k ctrl+1", "foldAtLevel1"], ["ctrl+k ctrl+2", "foldAtLevel2"], ["ctrl+k ctrl+3", "foldAtLevel3"],
+		["ctrl+k ctrl+4", "foldAtLevel4"], ["ctrl+k ctrl+5", "foldAtLevel5"], ["ctrl+k ctrl+6", "foldAtLevel6"],
+		["ctrl+k ctrl+7", "foldAtLevel7"], ["ctrl+k ctrl+8", "foldAtLevel8"], ["ctrl+k ctrl+9", "foldAtLevel9"],
 		["Backspace", "backspace"], ["shift+Backspace", "backspace"], ["Delete", "delete"],
 		["ctrl+Backspace", "deleteWordLeft"], ["ctrl+Delete", "deleteWordRight"],
 		["ctrl+alt+Backspace", "deleteSubwordLeft"], ["ctrl+alt+Delete", "deleteSubwordRight"],
@@ -278,4 +284,15 @@ test "F1 and ctrl+shift+p open the palette, and a command's first key is the one
 	assert first.get("palette") == "F1" && first.get("selectAllOccurrences") == "ctrl+shift+l";
 	assert first.get("skipToNextOccurrence") == "ctrl+k ctrl+d" && first.get("copy") == "ctrl+c";
 	assert !first.has("confirmList");
+}
+
+test "fold keys: ctrl+shift+brackets fold and unfold, the rest follow ctrl+k" {
+	const m = defaultKeymap();
+	assert chord(m, press("[", true, true)) == "fold" && chord(m, press("]", true, true)) == "unfoldLines";
+	const after = (key: string): string => {
+		assert chord(m, press("k", true, false)) == "Pending";
+		return chord(m, press(key, true, false));
+	};
+	assert after("l") == "toggleFold" && after("[") == "foldRecursive" && after("]") == "unfoldRecursive";
+	assert after("0") == "foldAll" && after("j") == "unfoldAll" && after("1") == "foldAtLevel1" && after("9") == "foldAtLevel9";
 }

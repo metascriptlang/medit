@@ -20,6 +20,7 @@ import { pairAround, typeText } from "./pairs";
 import { BracketPair, enclosingBrackets } from "./brackets";
 import { MenuMove } from "./completer";
 import { Expander } from "./expand";
+import { Folds, lineAfter, shownEnd, shownLine } from "./folds";
 import { BlockComment } from "./language";
 import {
 	WordCase,
@@ -72,6 +73,7 @@ export interface Context {
 	palette: () => void;
 	navigate: (back: boolean) => void;
 	expander: Expander;
+	folds: Folds;
 	scrollRows: (rows: int32) => void;
 }
 
@@ -105,18 +107,25 @@ function moved(e: Editor, extend: boolean, target: (doc: Document, s: Sel) => in
 	});
 }
 
+function outsideFolds(cx: Context, target: (doc: Document, s: Sel) => int32): (doc: Document, s: Sel) => int32 {
+	return (doc: Document, s: Sel): int32 => {
+		const head = target(doc, s);
+		return cx.folds.clipped(doc, head, head > s.head);
+	};
+}
+
 function jump(to: Target): Motion {
 	return (e: Editor, cx: Context, extend: boolean): void => {
-		moved(e, extend, (doc: Document, s: Sel): int32 => to(doc, s.head));
+		moved(e, extend, outsideFolds(cx, (doc: Document, s: Sel): int32 => to(doc, s.head)));
 	};
 }
 
 function step(by: Target, toStart: boolean): Motion {
 	return (e: Editor, cx: Context, extend: boolean): void => {
-		moved(e, extend, (doc: Document, s: Sel): int32 => {
+		moved(e, extend, outsideFolds(cx, (doc: Document, s: Sel): int32 => {
 			if (!extend && !s.isEmpty()) { return toStart ? s.start() : s.end(); }
 			return by(doc, s.head);
-		});
+		}));
 	};
 }
 
@@ -130,53 +139,57 @@ function byPages(pages: int32): Motion {
 	};
 }
 
-function lineEndAt(doc: Document, at: int32): int32 { return doc.lineEnd(doc.lineOf(at)); }
 function docStart(doc: Document, at: int32): int32 { return 0; }
 function docEnd(doc: Document, at: int32): int32 { return doc.length(); }
 
 function rowAt(doc: Document, cx: Context, at: int32): VisualRow {
-	const rows = rowsOf(doc, doc.lineOf(at), cx.wrapWidth());
+	const rows = rowsOf(doc, doc.lineOf(at), cx.wrapWidth(), [], cx.folds.shown(doc));
 	return rows[rowIndexOf(rows, at)];
 }
 
 function toRowStart(e: Editor, cx: Context, extend: boolean): void {
-	moved(e, extend, (doc: Document, s: Sel): int32 => {
-		const soft = rowAt(doc, cx, s.head).from;
-		return soft > indentEnd(doc, doc.lineOf(s.head)) && s.head != soft ? soft : doc.smartHome(s.head);
-	});
+	moved(e, extend, outsideFolds(cx, (doc: Document, s: Sel): int32 => {
+		const r = rowAt(doc, cx, s.head);
+		const soft = r.from;
+		const home = doc.lineOf(s.head) == r.line ? s.head : doc.lineEnd(r.line);
+		return soft > indentEnd(doc, r.line) && s.head != soft ? soft : doc.smartHome(home);
+	}));
 }
 
 function toRowEnd(e: Editor, cx: Context, extend: boolean): void {
-	moved(e, extend, (doc: Document, s: Sel): int32 => {
+	moved(e, extend, outsideFolds(cx, (doc: Document, s: Sel): int32 => {
 		const r = rowAt(doc, cx, s.head);
 		const soft = r.last ? r.to : prevCluster(doc, r.to);
-		return s.head != soft ? soft : lineEndAt(doc, s.head);
-	});
+		return s.head != soft ? soft : doc.shownEnd(cx.folds.shown(doc), r.line);
+	}));
 }
 
 function vertical(e: Editor, cx: Context, extend: boolean, rows: int32): void {
 	const doc = e.doc;
 	const width = cx.wrapWidth();
 	const last = doc.lineCount() - 1;
+	const folds = cx.folds.shown(doc);
 	reselect(e, (s: Sel): Sel => {
-		let line = doc.lineOf(s.head);
-		let lineRows = rowsOf(doc, line, width);
+		let line = doc.shownLine(folds, doc.lineOf(s.head));
+		let lineRows = rowsOf(doc, line, width, [], folds);
 		let row = rowIndexOf(lineRows, s.head);
-		const goal = s.goal !== null ? s.goal as int32 : cellIn(doc, lineRows[row], s.head);
+		const goal = s.goal !== null ? s.goal as int32 : cellIn(doc, lineRows[row], s.head, [], folds);
 		row += rows;
 		while (row < 0 && line > 0) {
-			line -= 1;
-			lineRows = rowsOf(doc, line, width);
+			line = doc.shownLine(folds, line - 1);
+			lineRows = rowsOf(doc, line, width, [], folds);
 			row += lineRows.length as int32;
 		}
-		while (row >= (lineRows.length as int32) && line < last) {
+		while (row >= (lineRows.length as int32)) {
+			const below = doc.lineAfter(folds, line);
+			if (below > last) { break; }
 			row -= lineRows.length as int32;
-			line += 1;
-			lineRows = rowsOf(doc, line, width);
+			line = below;
+			lineRows = rowsOf(doc, line, width, [], folds);
 		}
 		let head = 0;
 		if (row >= (lineRows.length as int32)) { head = doc.length(); }
-		else if (row >= 0) { head = offsetIn(doc, lineRows[row], goal); }
+		else if (row >= 0) { head = offsetIn(doc, lineRows[row], goal, [], folds); }
 		return { anchor: extend ? s.anchor : head, head, goal };
 	});
 }
@@ -244,9 +257,16 @@ function deleteEach(e: Editor, group: string, around: (doc: Document, at: int32)
 	e.end();
 }
 
+function foldingTo(level: int32): Command {
+	return (e: Editor, cx: Context): void => { const _folded = cx.folds.foldAtLevel(e, level); };
+}
+
 function deleteToward(group: string, by: Target): Command {
 	return (e: Editor, cx: Context): void => {
-		deleteEach(e, group, (doc: Document, at: int32): Sel => span(at, by(doc, at)));
+		deleteEach(e, group, (doc: Document, at: int32): Sel => {
+			const to = by(doc, at);
+			return span(at, cx.folds.clipped(doc, to, to > at));
+		});
 	};
 }
 
@@ -994,7 +1014,7 @@ export function commands(): Map<string, Command> {
 	table.set("backspace", (e: Editor, cx: Context): void => {
 		deleteEach(e, "delete", (doc: Document, at: int32): Sel => {
 			const pair = pairAround(e, at);
-			return pair !== null ? pair as Sel : span(at, prevCluster(doc, at));
+			return pair !== null ? pair as Sel : span(at, cx.folds.clipped(doc, prevCluster(doc, at), false));
 		});
 	});
 	table.set("delete", deleteToward("delete", nextCluster));
@@ -1007,6 +1027,14 @@ export function commands(): Map<string, Command> {
 	table.set("copy", copy);
 	table.set("cut", cut);
 	table.set("toggleWrap", (e: Editor, cx: Context): void => { cx.toggleWrap(); });
+	table.set("fold", (e: Editor, cx: Context): void => { const _folded = cx.folds.fold(e); });
+	table.set("foldRecursive", (e: Editor, cx: Context): void => { const _folded = cx.folds.foldRecursive(e); });
+	table.set("foldAll", (e: Editor, cx: Context): void => { const _folded = cx.folds.foldAll(e); });
+	table.set("unfoldLines", (e: Editor, cx: Context): void => { const _opened = cx.folds.unfoldLines(e); });
+	table.set("unfoldRecursive", (e: Editor, cx: Context): void => { const _opened = cx.folds.unfoldRecursive(e); });
+	table.set("unfoldAll", (e: Editor, cx: Context): void => { const _opened = cx.folds.unfoldAll(e); });
+	table.set("toggleFold", (e: Editor, cx: Context): void => { const _toggled = cx.folds.toggleFold(e); });
+	for (let level = 1; level <= 9; level++) { table.set(`foldAtLevel${level}`, foldingTo(level)); }
 	table.set("save", (e: Editor, cx: Context): void => {
 		if (cx.save(e.doc.fileText()) === null) { e.markSaved(); }
 	});
@@ -1167,6 +1195,7 @@ function runner(
 		palette: (): void => {},
 		navigate: (back: boolean): void => {},
 		expander: new Expander(null),
+		folds: new Folds(null),
 		scrollRows: (rows: int32): void => { scrolled.push(rows); },
 	};
 	return (e: Editor, name: string): void => {
@@ -2099,4 +2128,48 @@ test "a selection holding a block comment with only blanks around it takes the c
 	e.select({ ranges: [span(0, 9)], primary: 0 });
 	run(e, "toggleBlockComments");
 	assert e.doc.text() == " a ";
+}
+
+test "up and down step over a folded block, and left and right jump across its placeholder" {
+	const run = runner();
+	const text = "a {\n  b\n  c\n}\nd";
+	const e = editorAt(text, [0]);
+	run(e, "fold");
+	assert heads(e) == "0";
+	run(e, "down");
+	assert heads(e) == "14";
+	run(e, "up");
+	assert heads(e) == "0";
+	run(e, "end");
+	assert heads(e) == "13";
+	run(e, "left");
+	assert heads(e) == "12";
+	run(e, "left");
+	assert heads(e) == "3";
+	run(e, "right");
+	assert heads(e) == "12";
+	run(e, "home");
+	assert heads(e) == "0";
+}
+
+test "backspace after a folded block deletes what it hides, and unfolding brings the lines back" {
+	const run = runner();
+	const e = editorAt("a {\n  b\n}\nc", [0]);
+	run(e, "toggleFold");
+	run(e, "down");
+	run(e, "up");
+	run(e, "end");
+	run(e, "left");
+	run(e, "backspace");
+	assert e.doc.text() == "a {}\nc" && heads(e) == "3";
+	run(e, "undo");
+	run(e, "unfoldAll");
+	run(e, "foldAtLevel1");
+	run(e, "unfoldLines");
+	run(e, "foldRecursive");
+	run(e, "unfoldRecursive");
+	assert heads(e) == "8";
+	run(e, "foldAll");
+	run(e, "down");
+	assert heads(e) == "11";
 }
