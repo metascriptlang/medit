@@ -245,7 +245,7 @@ export function snippetText(snippet: string): string {
 	return snippetPart(snippet, 0, false)[0];
 }
 
-function edited(doc: Document, version: int32, e: Edit): Edit | null {
+export function edited(doc: Document, version: int32, e: Edit): Edit | null {
 	const from = doc.offsetSince(version, e.from, Bias.Left);
 	const to = doc.offsetSince(version, e.to, Bias.Right);
 	if (from === null || to === null) { return null; }
