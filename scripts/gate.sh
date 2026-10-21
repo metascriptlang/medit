@@ -2,7 +2,7 @@
 # The land gate of CLAUDE.md §Gate: every test file, the open bench at 100 MB, then the desktop and both web builds.
 set -e
 cd "$(dirname "$0")/.."
-for f in $(grep -rl '^test ' src); do
+for f in $(grep -rlE '^[[:space:]]*test "' src); do
 	msc test "$f" > out/gate-test.log 2>&1 || { grep -E "^ *(×|AssertionError|at )|error" out/gate-test.log | head -20; echo "gate: red in $f"; exit 1; }
 	echo "gate: green $f"
 done
