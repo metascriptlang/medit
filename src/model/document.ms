@@ -134,6 +134,14 @@ export class Document {
 		return this.log.slice(this.log.length - behind);
 	}
 
+	offsetSince(version: int32, offset: int32, bias: Bias): int32 | null {
+		const logged = this.changesSince(version);
+		if (logged === null) { return null; }
+		let at = offset;
+		for (const c of logged) { at = mapOffset(at, c.change, bias); }
+		return at;
+	}
+
 	anchor(offset: int32, bias: Bias): Anchor {
 		if (offset < 0 || offset > this.length()) {
 			throw new Error(`Document.anchor: offset ${offset} is outside 0..${this.length()}`);

@@ -1,5 +1,5 @@
 import { Rope } from "../text/rope";
-import { Bias, Document, mapOffset } from "../model/document";
+import { Bias, Document } from "../model/document";
 import { Position, Range, offsetIn, offsetOf, positionIn } from "./position";
 
 const KEPT_VERSIONS: int32 = 10;
@@ -69,11 +69,7 @@ struct Sent {
 }
 
 function mapped(doc: Document, text: Rope, at: int32, p: Position, bias: Bias): int32 | null {
-	const logged = doc.changesSince(at);
-	if (logged === null) { return null; }
-	let offset = offsetIn(text, p);
-	for (const c of logged) { offset = mapOffset(offset, c.change, bias); }
-	return offset;
+	return doc.offsetSince(at, offsetIn(text, p), bias);
 }
 
 export class DocumentSync {
