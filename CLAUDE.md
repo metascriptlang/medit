@@ -53,13 +53,18 @@ usual.
   A server's positions name the document version they were computed on; `DocumentSync` keeps the last
   `KEPT_VERSIONS` texts sent and maps through the edits since, and drops a reply whose version
   it no longer holds.
+- A save trims trailing whitespace and ends the file with one newline, in one undo step, unless an
+  `.editorconfig` section says otherwise. The desktop reads every `.editorconfig` from the file's
+  directory up to the drive; the web build reads those under the bridge's `--root` only.
 
 ## Build and run
 
 Run from the repository root: fonts are loaded by relative path.
 
 - Desktop (Ion window, Windows): `msc build src/app/medic.ms --output=out/medic.exe`, then
-  `out/medic.exe <file>`. Add `--release` to open large files: building the document of a 100 MB
+  `out/medic.exe <file or folder>`. A folder is the project and opens with no tab; a file's project
+  is the nearest folder above it holding `.git`, else its own folder. ctrl+p lists the project's
+  files: git's tracked and untracked ones, else a walk. Add `--release` to open large files: building the document of a 100 MB
   file took 0.25 s in release against 2.6 s in debug (2026-10-20).
 - Open cost: `msc run --release scripts/openBench.ms -- <megabytes>` times the document build, a
   scroll frame, a keystroke, a find over the whole file and a save's file text on generated text,
@@ -77,9 +82,11 @@ Run from the repository root: fonts are loaded by relative path.
   `index.html?lsp=ws://127.0.0.1:8766`. The page's sample is `file:///medic/sample.ms`, which the
   server sees only through the protocol. With `--root`, the server starts in `<dir>` and
   `index.html?lsp=...&file=<path under dir>` opens and saves that file through the bridge, so the
-  server reads it and its imports from disk. The bridge answers pages served from this machine only.
+  server reads it and its imports from disk; without `&file=` the page opens with no tab and ctrl+p
+  lists the files under `<dir>`. The bridge answers pages served from this machine only.
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
-  header). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
+  header; `hold:ctrl` keeps a modifier down across the steps that follow, as the ctrl+tab switcher
+  needs). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
 - Drive the desktop build: `pwsh scripts/desktopDrive.ps1 out/medic.exe <file> <outDir> <step>...`
   (steps in its header, named as in `webDrive.mjs`). It sends messages to medic's own window, so the
   window needs no focus and the screenshots show only that window; keys reach the editor only after
