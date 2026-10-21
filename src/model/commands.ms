@@ -438,6 +438,14 @@ function outdentTo(doc: Document, line: int32, width: int32): int32 {
 	return to;
 }
 
+function indentStopBefore(e: Editor, at: int32): int32 {
+	const doc = e.doc;
+	const from = doc.lineStart(doc.lineOf(at));
+	if (at == from || at > blankRight(doc, from) || doc.byteAt(from) == "\t".code) { return at; }
+	const unit = e.indent == "\t" ? OUTDENT_SPACES : e.indent.byteLength;
+	return from + (((at - from - 1) / unit) as int32) * unit;
+}
+
 function outdent(e: Editor, cx: Context): void {
 	const edits: Edit[] = [];
 	for (const line of touchedLines(e)) {
@@ -1083,7 +1091,9 @@ export function commands(): Map<string, Command> {
 	table.set("backspace", (e: Editor, cx: Context): void => {
 		deleteEach(e, "delete", (doc: Document, at: int32): Sel => {
 			const pair = pairAround(e, at);
-			return pair !== null ? pair as Sel : span(at, cx.folds.clipped(doc, prevCluster(doc, at), false));
+			if (pair !== null) { return pair as Sel; }
+			const to = Math.min(prevCluster(doc, at), indentStopBefore(e, at));
+			return span(at, cx.folds.clipped(doc, to, false));
 		});
 	});
 	table.set("delete", deleteToward("delete", nextCluster));
@@ -1426,6 +1436,59 @@ test "a newline before the star, outside a comment, or after the closer does not
 	const after = docEditor("\t/**\n\t * a\n\t */", 15, "/**");
 	run(after, "newline");
 	assert after.doc.text() == "\t/**\n\t * a\n\t */\n\t" && heads(after) == "17";
+}
+
+test "backspace in the indent of a space-indented line deletes back to the previous indent stop" {
+	const run = runner();
+	const e = editorAt("        x", [8]);
+	e.indent = "    ";
+	run(e, "backspace");
+	assert e.doc.text() == "    x" && heads(e) == "4";
+	const odd = editorAt("      x", [6]);
+	odd.indent = "    ";
+	run(odd, "backspace");
+	assert odd.doc.text() == "    x" && heads(odd) == "4";
+	const tabbed = editorAt("      x", [6]);
+	run(tabbed, "backspace");
+	assert tabbed.doc.text() == "    x";
+	const inside = editorAt("        x", [6]);
+	inside.indent = "    ";
+	run(inside, "backspace");
+	assert inside.doc.text() == "      x" && heads(inside) == "4";
+}
+
+test "backspace on a tab-indented line, past the indent or at a line start deletes one cluster" {
+	const run = runner();
+	const tabs = editorAt("\t\tx", [2]);
+	tabs.indent = "    ";
+	run(tabs, "backspace");
+	assert tabs.doc.text() == "\tx";
+	const mixed = editorAt("\t  x", [3]);
+	mixed.indent = "    ";
+	run(mixed, "backspace");
+	assert mixed.doc.text() == "\t x";
+	const spaceFirst = editorAt("  \tx", [3]);
+	spaceFirst.indent = "    ";
+	run(spaceFirst, "backspace");
+	assert spaceFirst.doc.text() == "x";
+	const past = editorAt("    a   b", [8]);
+	past.indent = "    ";
+	run(past, "backspace");
+	assert past.doc.text() == "    a  b";
+	const start = editorAt("a\n    b", [2]);
+	start.indent = "    ";
+	run(start, "backspace");
+	assert start.doc.text() == "a    b";
+}
+
+test "backspace to indent stops at several cursors is one step" {
+	const run = runner();
+	const e = editorAt("    a\n      b", [4, 12]);
+	e.indent = "  ";
+	run(e, "backspace");
+	assert e.doc.text() == "  a\n    b" && heads(e) == "2,8";
+	run(e, "undo");
+	assert e.doc.text() == "    a\n      b";
 }
 
 test "a newline at the end of the indent moves the indent down with the line" {
