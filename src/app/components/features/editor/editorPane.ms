@@ -636,7 +636,6 @@ export function EditorPane(props: {
 	}, (): void => { referencesChanged(); });
 	if (session !== null) {
 		(session as Session).applying((edits: Edit[], others: int32): string | null => {
-			if (others > 0) { return `the edit also changes ${others} file${others == 1 ? " that is" : "s that are"} not open, and medic edits open files only`; }
 			const skipped = acceptLater(editor, edits, doc.version(), "");
 			if (skipped > 0) { notice = `left out ${skipped} edit${skipped == 1 ? "" : "s"} from the language server that overlap another`; }
 			reveal();

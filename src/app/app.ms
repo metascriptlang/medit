@@ -31,6 +31,8 @@ import { TabEntry, TabHit } from "../view/tabStrip";
 import { Syntax, covers } from "../syntax/syntax";
 import { Link, Session } from "../lsp/session";
 import { Connection } from "../lsp/connection";
+import { Away, editsIn } from "../lsp/server";
+import { acceptLater } from "../model/completion";
 import { offsetOf } from "../lsp/position";
 import { BACKGROUND, MUTED, PADDING, PANEL, SELECTION } from "./theme";
 import { EditorPane, measuredGrid } from "./components/features/editor/editorPane";
@@ -115,6 +117,8 @@ export function App(platform: Platform, first: string | null): NeonNode {
 	let height = 0.0;
 	let strip: Strip = { cells: [], left: 0 };
 	let empty: ViewHandle | null = null;
+	let elsewhere = (files: Away[]): string | null => "nothing opens files yet";
+
 	const sessionFor = (key: string, doc: Document, uri: string): [Session | null, string] => {
 		const language = languageOf(key);
 		if (language === null || platform.link === null) { return [null, ""]; }
@@ -124,14 +128,15 @@ export function App(platform: Platform, first: string | null): NeonNode {
 			const link = (platform.link as (command: string) => Link | null)(server);
 			if (link === null) { return [null, `cannot start ${server}`]; }
 			connection = new Connection(link as Link, server, platform.rootUri, platform.processId);
+			(connection as Connection).editsElsewhere((files: Away[]): string | null => elsewhere(files));
 			connections.set(server, connection as Connection);
 		}
 		return [(connection as Connection).open(doc, uri, id), ""];
 	};
 
-	const load = (key: string): string | null => {
+	const load = (key: string, activate: boolean): string | null => {
 		if (items.has(key)) {
-			tabs.open(key);
+			if (activate) { tabs.open(key); }
 			return null;
 		}
 		const file = platform.read(key);
@@ -147,12 +152,12 @@ export function App(platform: Platform, first: string | null): NeonNode {
 		const syntax = covers(key) && editor.doc.length() <= HIGHLIGHT_LIMIT ? new Syntax() : null;
 		const [session, note] = sessionFor(key, editor.doc, file.uri);
 		items.set(key, new Item(key, editor, syntax, session, note));
-		tabs.open(key);
+		if (activate) { tabs.open(key); } else { const _added = tabs.add(key); }
 		return null;
 	};
 
 	if (first !== null) {
-		const failed = load(first as string);
+		const failed = load(first as string, true);
 		if (failed !== null) { platform.fail(failed as string); }
 	}
 
@@ -213,9 +218,28 @@ export function App(platform: Platform, first: string | null): NeonNode {
 	};
 
 	const open = (key: string): string | null => {
-		const failed = load(key);
+		const failed = load(key, true);
 		if (failed === null) { shownTabs(); }
 		return failed;
+	};
+
+	elsewhere = (files: Away[]): string | null => {
+		const keys: string[] = [];
+		for (const f of files) {
+			const key = platform.keyOfUri(f.uri);
+			if (key === null) { return `cannot open ${f.uri}`; }
+			const failed = load(key as string, false);
+			if (failed !== null) { return failed; }
+			keys.push(key as string);
+		}
+		let skipped = 0;
+		for (let i = 0; i < (files.length as int32); i++) {
+			const editor = (items.get(keys[i]) as Item).editor;
+			skipped += acceptLater(editor, editsIn(editor.doc, files[i]), editor.doc.version(), "");
+		}
+		shownTabs();
+		if (skipped > 0) { tell(`left out ${skipped} edit${skipped == 1 ? "" : "s"} in other files that overlap another`); }
+		return null;
 	};
 
 	const jumpTo = (key: string, at: int32): void => {
