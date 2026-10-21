@@ -2,6 +2,8 @@ import { NeonNode } from "../../../../../../neon/src/render/node";
 import { NeonEvent } from "../../../../../../neon/src/render/event";
 import { Accessor, createSignal } from "../../../../../../neon/src/core/signal";
 import { List, createList } from "../../../../../../neon/src/core/list";
+import { onSettled } from "../../../../../../neon/src/core/effect";
+import { Cleanup } from "../../../../../../neon/src/core/types";
 import { ForList, Show } from "../../../../../../neon/src/macros/ui/flow";
 import { PixelRatio } from "../../../../../../neon/src/api/pixelRatio";
 import { TextInputHandle, TextSelection, View, ViewHandle } from "../../../../../../neon/src/components/primitives";
@@ -30,6 +32,7 @@ import { CodeAction, CodeActions } from "../../../../model/actions";
 import { Inlay, InlayHints } from "../../../../model/inlays";
 import { Outline, OutlineItem } from "../../../../model/outline";
 import { NavHistory, Spot } from "../../../../model/history";
+import { PaneHandle, Workspace } from "../../../../model/workspace";
 import { Expander } from "../../../../model/expand";
 import { Fold, Folds, Toggle, lineHidden, shownEnd, shownLine } from "../../../../model/folds";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, listKeymap, signatureKeymap } from "../../../../input/keymap";
@@ -41,7 +44,6 @@ import { Tone } from "../../../../view/tone";
 import { Diagnostic } from "../../../../model/diagnostics";
 import { Session } from "../../../../lsp/session";
 import { Span, Target } from "../../../../lsp/server";
-import { filePath } from "../../../../lsp/uri";
 import { CARET, FONT_SIZE, MUTED, PANEL, SELECTION } from "../../../theme";
 import { caretPlace, goToHelp, statusLine } from "../../../../view/status";
 import { Box, Overlay } from "../../ui/overlay";
@@ -63,6 +65,15 @@ import { createBlink } from "./blink";
 import { Grid, framed, gutterWidth, painted, toggleCell } from "./paint";
 
 const PROBE = "MMMMMMMMMM";
+
+export function measuredGrid(handle: ViewHandle): Grid {
+	const probe = handle.measureText(PROBE, { fontSize: FONT_SIZE });
+	const ratio = PixelRatio.get();
+	return {
+		cellWidth: Math.round(probe.width / PROBE.length * ratio) / ratio,
+		rowHeight: Math.round(probe.height * ratio) / ratio,
+	};
+}
 const MULTI_CLICK_MS: float64 = 400;
 const HOVER_DELAY_MS: float64 = 300;
 const METASCRIPT = "metascript";
@@ -91,6 +102,9 @@ export function EditorPane(props: {
 	fail: (message: string) => void;
 	session: Session | null;
 	serverNote: string;
+	workspace: Workspace;
+	handle: (h: PaneHandle) => void;
+	shown: () => boolean;
 }): NeonNode {
 	const { editor, syntax, clip, fail, session } = props;
 	const doc = editor.doc;
@@ -158,6 +172,7 @@ export function EditorPane(props: {
 	let goingFrom: Viewport | null = null;
 	let goText = "";
 	let notice: string | null = null;
+	let centerPending = false;
 	let areaWidth = 0.0;
 	const [carded, setCarded] = createSignal<boolean>(false);
 	const [cardBox, setCardBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
@@ -211,7 +226,7 @@ export function EditorPane(props: {
 		stopWaiting: (timer: int32): void => { clearTimeout(timer); },
 	}, (): void => { occurrencesChanged(); });
 	const history = new NavHistory(doc);
-	let seenAt = 0;
+	let seenAt = editor.selections.primaryRange().head;
 	let seenVersion = doc.version();
 	let seenTop = 0;
 	let jumping = false;
@@ -305,6 +320,7 @@ export function EditorPane(props: {
 			: ` ${props.path}${dirty ? " ●" : ""}${note}${serverPart()}`;
 		const text = statusLine(left, `${caretPlace(doc, editor.selections)} `, columns);
 		setStatus({ spans: [{ text, style: { color: loud !== null ? CARET : MUTED } }] });
+		props.workspace.changed();
 	};
 
 	const visibleDiagnostics = (): Diagnostic[] => {
@@ -604,7 +620,7 @@ export function EditorPane(props: {
 	}, (message: string): void => {
 		notice = message;
 		paint();
-	}, (): void => { referencesChanged(); });
+	}, (): void => { referencesChanged(); }, (p: Place): string | null => props.workspace.openAt(p.uri, p.line, p.character));
 	referencesChanged = (): void => {
 		if (grid.cellWidth > 0) { reveal(); }
 	};
@@ -620,7 +636,7 @@ export function EditorPane(props: {
 	}, (): void => { referencesChanged(); });
 	if (session !== null) {
 		(session as Session).applying((edits: Edit[], others: int32): string | null => {
-			if (others > 0) { return `the edit also changes ${others} other file${others == 1 ? "" : "s"}, and medic edits one file`; }
+			if (others > 0) { return `the edit also changes ${others} file${others == 1 ? " that is" : "s that are"} not open, and medic edits open files only`; }
 			const skipped = acceptLater(editor, edits, doc.version(), "");
 			if (skipped > 0) { notice = `left out ${skipped} edit${skipped == 1 ? "" : "s"} from the language server that overlap another`; }
 			reveal();
@@ -819,8 +835,9 @@ export function EditorPane(props: {
 					jumped(found[0], row);
 					return;
 				} else {
-					const path = filePath(found[0].uri);
-					notice = `definition in ${path === null ? found[0].uri : path as string}:${found[0].range.start.line + 1}`;
+					const failed = props.workspace.openAt(found[0].uri, found[0].range.start.line, found[0].range.start.character);
+					if (failed === null) { return; }
+					notice = failed;
 				}
 				paint();
 			});
@@ -894,10 +911,14 @@ export function EditorPane(props: {
 			outline.close();
 			palette.open();
 		},
+		workspace: props.workspace,
 		navigate: (back: boolean): void => {
 			const here: Spot = { at: editor.selections.primaryRange().head, top: view.line };
 			const to = back ? history.back(here) : history.onward(here);
-			if (to === null) { return; }
+			if (to === null) {
+				props.workspace.navigate(back);
+				return;
+			}
 			const s = to as Spot;
 			editor.select(single(s.at));
 			view = { ...view, line: Math.min(s.top, doc.lineCount() - 1), sub: 0 };
@@ -920,16 +941,17 @@ export function EditorPane(props: {
 			fail("the editor laid out before its handle arrived");
 			return;
 		}
-		const probe = (area as ViewHandle).measureText(PROBE, { fontSize: FONT_SIZE });
-		const ratio = PixelRatio.get();
-		const cellPx = Math.round(probe.width / PROBE.length * ratio);
-		const rowPx = Math.round(probe.height * ratio);
-		if (cellPx <= 0 || rowPx <= 0) {
-			fail(`cell ${probe.width / PROBE.length}x${probe.height} is not a grid size`);
+		const measured = measuredGrid(area as ViewHandle);
+		if (measured.cellWidth <= 0 || measured.rowHeight <= 0) {
+			fail(`cell ${measured.cellWidth}x${measured.rowHeight} is not a grid size`);
 			return;
 		}
-		grid = { cellWidth: cellPx / ratio, rowHeight: rowPx / ratio };
+		grid = measured;
+		const ratio = PixelRatio.get();
+		const cellPx = Math.round(grid.cellWidth * ratio);
+		const rowPx = Math.round(grid.rowHeight * ratio);
 		setDrawn(grid);
+		props.workspace.measured(grid.cellWidth, grid.rowHeight);
 		columns = Math.floor(PixelRatio.getPixelSizeForLayoutSize(e.width) / cellPx) as int32;
 		areaHeight = e.height;
 		areaWidth = e.width;
@@ -937,6 +959,10 @@ export function EditorPane(props: {
 		view = { ...view, rows: Math.max(1, Math.floor(heightPx / rowPx) as int32) };
 		fit();
 		view = view.resized(view.rows, view.cols, doc.lineCount(), rowsIn, spanOf);
+		if (centerPending) {
+			centerPending = false;
+			view = view.centered(doc.lineOf(editor.selections.primaryRange().head), doc.lineCount(), rowsIn, spanOf);
+		}
 		paint();
 	};
 
@@ -1062,7 +1088,7 @@ export function EditorPane(props: {
 			return;
 		}
 		const offset = offsetAt(e);
-		const now = Date.now();
+		const now = performance.now();
 		clicks = now - lastPress < MULTI_CLICK_MS && offset == lastOffset ? clicks % 3 + 1 : 1;
 		lastPress = now;
 		lastOffset = offset;
@@ -1149,151 +1175,175 @@ export function EditorPane(props: {
 		});
 	}
 
-	return <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0 }}>
-		<View
-			style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, pointerEvents: "box-only" }}
-			focusable
-			ref={(handle: ViewHandle): void => {
-				area = handle;
-				handle.focus();
-			}}
-			imeRect={{
-				x: caret().x,
-				y: caret().y,
-				width: drawn().cellWidth,
-				height: drawn().rowHeight,
-			}}
-			onLayout={layout}
-			onKeyDown={typed}
-			onTextInput={committed}
-			onPreedit={(e: NeonEvent): void => { setPreedit(e.text); }}
-			onPointerDown={pressed}
-			onPointerMove={dragged}
-			onPointerUp={(e: NeonEvent): void => { gesture = null; }}
-			onWheel={wheeled}>
-			{ForList<Box>({
-				each: shades,
-				children: (b: Accessor<Box>): NeonNode => <Overlay box={b()} />,
-			})}
-			{ForList<Row>({
-				each: rows,
-				children: (r: Accessor<Row>): NeonNode => <LineRow
-					row={r()}
+	return <Show when={props.shown()}>
+		<View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0 }}>
+			<View
+				style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, pointerEvents: "box-only" }}
+				focusable
+				ref={(handle: ViewHandle): void => {
+					area = handle;
+					onSettled((): Cleanup | null => {
+						handle.focus();
+						return (): void => { area = null; };
+					});
+					props.handle({
+						focus,
+						head: (): int32 => editor.selections.primaryRange().head,
+						jumpTo: (at: int32): void => {
+							editor.select(single(at));
+							jumping = true;
+							if (grid.cellWidth <= 0 || view.rows <= 1) {
+								centerPending = true;
+								return;
+							}
+							view = view.centered(doc.lineOf(at), doc.lineCount(), rowsIn, spanOf);
+							paint();
+						},
+						tell: (message: string): void => {
+							notice = message;
+							if (grid.cellWidth > 0) { paint(); }
+						},
+					});
+				}}
+				imeRect={{
+					x: caret().x,
+					y: caret().y,
+					width: drawn().cellWidth,
+					height: drawn().rowHeight,
+				}}
+				onLayout={layout}
+				onKeyDown={typed}
+				onKeyUp={(e: NeonEvent): void => { props.workspace.keyUp(e.ctrlKey); }}
+				onTextInput={committed}
+				onPreedit={(e: NeonEvent): void => { setPreedit(e.text); }}
+				onPointerDown={pressed}
+				onPointerMove={dragged}
+				onPointerUp={(e: NeonEvent): void => { gesture = null; }}
+				onWheel={wheeled}>
+				{ForList<Box>({
+					each: shades,
+					children: (b: Accessor<Box>): NeonNode => <Overlay box={b()} />,
+				})}
+				{ForList<Row>({
+					each: rows,
+					children: (r: Accessor<Row>): NeonNode => <LineRow
+						row={r()}
+						cellWidth={drawn().cellWidth}
+						rowHeight={drawn().rowHeight}
+					/>,
+				})}
+				{ForList<Box>({
+					each: carets,
+					children: (b: Accessor<Box>): NeonNode => <Overlay box={b()} shown={blink.on()} />,
+				})}
+				<Show when={preedit() != ""}>
+					<Preedit text={preedit()} at={caret()} cellWidth={drawn().cellWidth} />
+				</Show>
+				<HoverCard
+					shown={carded()}
+					box={cardBox()}
+					rows={cardRows}
 					cellWidth={drawn().cellWidth}
 					rowHeight={drawn().rowHeight}
-				/>,
-			})}
-			{ForList<Box>({
-				each: carets,
-				children: (b: Accessor<Box>): NeonNode => <Overlay box={b()} shown={blink.on()} />,
-			})}
-			<Show when={preedit() != ""}>
-				<Preedit text={preedit()} at={caret()} cellWidth={drawn().cellWidth} />
-			</Show>
-			<HoverCard
-				shown={carded()}
-				box={cardBox()}
-				rows={cardRows}
+				/>
+				<CompletionMenu
+					shown={menued()}
+					box={menuBox()}
+					selected={menuPick()}
+					rows={menuLines}
+					cellWidth={drawn().cellWidth}
+					rowHeight={drawn().rowHeight}
+				/>
+				<HoverCard
+					shown={asided()}
+					box={asideBox()}
+					rows={asideRows}
+					cellWidth={drawn().cellWidth}
+					rowHeight={drawn().rowHeight}
+				/>
+				<CompletionMenu
+					shown={listed()}
+					box={listBox()}
+					selected={listPick()}
+					rows={listLines}
+					cellWidth={drawn().cellWidth}
+					rowHeight={drawn().rowHeight}
+				/>
+				<HoverCard
+					shown={signed()}
+					box={signBox()}
+					rows={signRows}
+					cellWidth={drawn().cellWidth}
+					rowHeight={drawn().rowHeight}
+				/>
+			</View>
+			<FindBar finder={finder} moved={reveal} closed={focus} />
+			<GoToBar
+				shown={goingTo()}
+				query={lineQuery()}
+				attach={(input: TextInputHandle): void => { input.focus(); }}
+				changed={goChanged}
+				confirmed={goConfirmed}
+				cancelled={goCancelled}
+			/>
+			<Picker
+				placeholder="symbol"
+				shown={outlined()}
+				box={outlineBox()}
+				selected={outlinePick()}
+				rows={outlineLines}
+				query={outlineQuery()}
 				cellWidth={drawn().cellWidth}
 				rowHeight={drawn().rowHeight}
+				attach={(input: TextInputHandle): void => { input.focus(); }}
+				changed={(text: string): void => {
+					setOutlineQuery(text);
+					outline.search(text);
+				}}
+				moved={(m: MenuMove): void => { outline.move(m); }}
+				confirmed={outlineConfirmed}
+				cancelled={outlineCancelled}
 			/>
-			<CompletionMenu
-				shown={menued()}
-				box={menuBox()}
-				selected={menuPick()}
-				rows={menuLines}
+			<Picker
+				placeholder="command"
+				shown={paletted()}
+				box={paletteBox()}
+				selected={palettePick()}
+				rows={paletteLines}
+				query={paletteQuery()}
 				cellWidth={drawn().cellWidth}
 				rowHeight={drawn().rowHeight}
+				attach={(input: TextInputHandle): void => { input.focus(); }}
+				changed={(text: string): void => {
+					setPaletteQuery(text);
+					palette.search(text);
+				}}
+				moved={(m: MenuMove): void => { palette.move(m); }}
+				confirmed={(): void => {
+					const name = palette.confirm();
+					focus();
+					if (name !== null) { run(name as string); }
+				}}
+				cancelled={(): void => {
+					palette.close();
+					focus();
+				}}
 			/>
-			<HoverCard
-				shown={asided()}
-				box={asideBox()}
-				rows={asideRows}
-				cellWidth={drawn().cellWidth}
-				rowHeight={drawn().rowHeight}
+			<RenameField
+				shown={renamed()}
+				box={renameBox()}
+				name={renameName()}
+				selection={renameSelection()}
+				changed={(text: string): void => {
+					renameText = text;
+					setRenameName(text);
+				}}
+				confirmed={(): void => { renamer.confirm(renameText); }}
+				cancelled={(): void => { renamer.cancel(); }}
 			/>
-			<CompletionMenu
-				shown={listed()}
-				box={listBox()}
-				selected={listPick()}
-				rows={listLines}
-				cellWidth={drawn().cellWidth}
-				rowHeight={drawn().rowHeight}
-			/>
-			<HoverCard
-				shown={signed()}
-				box={signBox()}
-				rows={signRows}
-				cellWidth={drawn().cellWidth}
-				rowHeight={drawn().rowHeight}
-			/>
+			<View style={{ height: drawn().rowHeight, backgroundColor: PANEL }}>
+				<LineRow row={status()} cellWidth={drawn().cellWidth} rowHeight={drawn().rowHeight} />
+			</View>
 		</View>
-		<FindBar finder={finder} moved={reveal} closed={focus} />
-		<GoToBar
-			shown={goingTo()}
-			query={lineQuery()}
-			attach={(input: TextInputHandle): void => { input.focus(); }}
-			changed={goChanged}
-			confirmed={goConfirmed}
-			cancelled={goCancelled}
-		/>
-		<Picker
-			placeholder="symbol"
-			shown={outlined()}
-			box={outlineBox()}
-			selected={outlinePick()}
-			rows={outlineLines}
-			query={outlineQuery()}
-			cellWidth={drawn().cellWidth}
-			rowHeight={drawn().rowHeight}
-			attach={(input: TextInputHandle): void => { input.focus(); }}
-			changed={(text: string): void => {
-				setOutlineQuery(text);
-				outline.search(text);
-			}}
-			moved={(m: MenuMove): void => { outline.move(m); }}
-			confirmed={outlineConfirmed}
-			cancelled={outlineCancelled}
-		/>
-		<Picker
-			placeholder="command"
-			shown={paletted()}
-			box={paletteBox()}
-			selected={palettePick()}
-			rows={paletteLines}
-			query={paletteQuery()}
-			cellWidth={drawn().cellWidth}
-			rowHeight={drawn().rowHeight}
-			attach={(input: TextInputHandle): void => { input.focus(); }}
-			changed={(text: string): void => {
-				setPaletteQuery(text);
-				palette.search(text);
-			}}
-			moved={(m: MenuMove): void => { palette.move(m); }}
-			confirmed={(): void => {
-				const name = palette.confirm();
-				focus();
-				if (name !== null) { run(name as string); }
-			}}
-			cancelled={(): void => {
-				palette.close();
-				focus();
-			}}
-		/>
-		<RenameField
-			shown={renamed()}
-			box={renameBox()}
-			name={renameName()}
-			selection={renameSelection()}
-			changed={(text: string): void => {
-				renameText = text;
-				setRenameName(text);
-			}}
-			confirmed={(): void => { renamer.confirm(renameText); }}
-			cancelled={(): void => { renamer.cancel(); }}
-		/>
-		<View style={{ height: drawn().rowHeight, backgroundColor: PANEL }}>
-			<LineRow row={status()} cellWidth={drawn().cellWidth} rowHeight={drawn().rowHeight} />
-		</View>
-	</View>;
+	</Show>;
 }
