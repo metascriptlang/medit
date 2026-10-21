@@ -25,7 +25,8 @@ import { SignatureAsk, SignatureHelp, SignatureHelper, SignatureProvider } from 
 import { Formatter } from "../../../../model/format";
 import { Occurrence, Occurrences } from "../../../../model/occurrences";
 import { Renamer, Renaming } from "../../../../model/rename";
-import { KeyPress, Outcome, completionKeymap, defaultKeymap, signatureKeymap } from "../../../../input/keymap";
+import { Place, References } from "../../../../model/references";
+import { KeyPress, Outcome, completionKeymap, defaultKeymap, referencesKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
@@ -45,6 +46,7 @@ import { FindBar } from "../find/findBar";
 import { createFinder } from "../find/finder";
 import { GoToBar } from "../goto/goToBar";
 import { RenameField } from "../rename/renameField";
+import { referenceColumns, referenceRows } from "../references/referenceList";
 import { HoverCard, cardOf, cardSize, placed } from "../hover/hoverCard";
 import { CompletionMenu, MENU_BORDER, MENU_ROWS, menuColumns, menuPlaced, menuRows, scrolledTop } from "../completion/completionMenu";
 import { signatureCard, signaturePlaced } from "../signature/signatureCard";
@@ -116,6 +118,14 @@ export function EditorPane(props: {
 	let renameText = "";
 	let placeRename: () => void = (): void => {};
 	let renameChanged: () => void = (): void => {};
+	const refKeys = referencesKeymap();
+	const [listed, setListed] = createSignal<boolean>(false);
+	const [listBox, setListBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const [listPick, setListPick] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const listLines: List<Row> = createList<Row>([]);
+	let listTop = 0;
+	let placeReferences: () => void = (): void => {};
+	let referencesChanged: () => void = (): void => {};
 	let goingFrom: Viewport | null = null;
 	let goText = "";
 	let notice: string | null = null;
@@ -330,6 +340,7 @@ export function EditorPane(props: {
 		placeMenu();
 		placeSignature();
 		placeRename();
+		placeReferences();
 		report();
 	};
 
@@ -490,6 +501,44 @@ export function EditorPane(props: {
 		reveal();
 		setRenamed(true);
 	};
+	const references = new References(editor, {
+		ask: (offset: int32, done: (found: Place[] | null) => void): int32 =>
+			session === null ? -1 : (session as Session).references(offset, done),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+	}, (message: string): void => {
+		notice = message;
+		paint();
+	}, (): void => { referencesChanged(); });
+	referencesChanged = (): void => {
+		if (grid.cellWidth > 0) { reveal(); }
+	};
+	placeReferences = (): void => {
+		const head = editor.selections.primaryRange().head;
+		let row = -1;
+		for (let k = 0; k < (frame.length as int32) && row < 0 && references.shown(); k++) {
+			if (frame[k].holds(head)) { row = k; }
+		}
+		if (row < 0 || grid.cellWidth <= 0) {
+			if (listed()) { setListed(false); }
+			return;
+		}
+		const places = references.places();
+		const total = places.length as int32;
+		const columns = referenceColumns(doc, places);
+		const x = gutterWidth(doc.lineCount()) * grid.cellWidth;
+		const place = menuPlaced(columns, Math.min(total, MENU_ROWS), x, row, view.rows, grid.rowHeight, grid.cellWidth, areaWidth, PANEL);
+		listTop = scrolledTop(listTop, references.selected, place.rows, total);
+		fill(listLines, referenceRows(doc, places, listTop, place.rows, columns));
+		setListPick({
+			x: 0,
+			y: (references.selected - listTop) * grid.rowHeight,
+			width: place.box.width - 2 * MENU_BORDER,
+			height: grid.rowHeight,
+			color: SELECTION,
+		});
+		setListBox(place.box);
+		setListed(true);
+	};
 	placeRename = (): void => {
 		const at = renamer.renaming();
 		if (at === null || grid.cellWidth <= 0) { return; }
@@ -596,6 +645,13 @@ export function EditorPane(props: {
 		hideSignatureHelp: (): void => { signer.dismiss(); },
 		format: (selections: boolean): void => { formatter.run(selections); },
 		rename: (): void => { renamer.start(); },
+		findReferences: (): void => {
+			completer.hide();
+			references.find();
+		},
+		moveReference: (move: MenuMove): void => { references.move(move); },
+		confirmReference: (): void => { references.confirm(); },
+		hideReferences: (): void => { references.dismiss(); },
 		goToLine: (): void => {
 			goingFrom = view;
 			setGoingTo(true);
@@ -654,6 +710,14 @@ export function EditorPane(props: {
 		hideCard();
 		notice = null;
 		const key: KeyPress = { key: e.key, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
+		if (references.shown() && keymap.pendingChords() == "") {
+			const m = refKeys.feed(key);
+			if (m.outcome == Outcome.Run) {
+				run(m.command);
+				return;
+			}
+			references.close();
+		}
 		if (completer.shown() && keymap.pendingChords() == "") {
 			const m = menuKeys.feed(key);
 			if (m.outcome == Outcome.Run) {
@@ -704,6 +768,7 @@ export function EditorPane(props: {
 	const pressed = (e: NeonEvent): void => {
 		hideCard();
 		if (renamed()) { renamer.cancel(); }
+		references.close();
 		if (grid.cellWidth <= 0 || e.button != 1) { return; }
 		if (overMenu(e)) {
 			completer.pick(menuTop + (Math.floor((e.locationY - menuBox().y - MENU_BORDER) / grid.rowHeight) as int32));
@@ -858,6 +923,14 @@ export function EditorPane(props: {
 				shown={asided()}
 				box={asideBox()}
 				rows={asideRows}
+				cellWidth={drawn().cellWidth}
+				rowHeight={drawn().rowHeight}
+			/>
+			<CompletionMenu
+				shown={listed()}
+				box={listBox()}
+				selected={listPick()}
+				rows={listLines}
 				cellWidth={drawn().cellWidth}
 				rowHeight={drawn().rowHeight}
 			/>

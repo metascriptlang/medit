@@ -52,7 +52,7 @@ function suffixOf(c: Completion): string {
 	return detail.byteLength > 0 && detail != c.label ? ` ${detail}` : "";
 }
 
-function cellsOf(text: string): int32 { return charsOf(text).text.length as int32; }
+export function cellsOf(text: string): int32 { return charsOf(text).text.length as int32; }
 
 // The columns the widest choice needs, the label and its suffix, up to the menu's limit.
 export function menuColumns(items: Completion[], choices: Choice[]): int32 {
@@ -88,7 +88,7 @@ function labelSpans(c: Completion, positions: int32[], spans: TextSpan[]): int32
 	return chars.text.length as int32;
 }
 
-function clipped(text: string, cells: int32): string {
+export function clipped(text: string, cells: int32): string {
 	const chars = charsOf(text).text;
 	if ((chars.length as int32) <= cells) { return text; }
 	return cells <= 0 ? "" : chars.slice(0, cells - 1).join("") + ELLIPSIS;
