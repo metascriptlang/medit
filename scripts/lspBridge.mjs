@@ -2,20 +2,26 @@
 // servers as the desktop. Each connection starts its own server; bytes pass through unchanged
 // in both directions (the Content-Length framing travels inside the frames).
 //
-//   node scripts/lspBridge.mjs [port] [--trace] [-- command args...]
+//   node scripts/lspBridge.mjs [port] [--trace] [--root <dir>] [-- command args...]
 //
 // The port defaults to 8766 and the command to `msc lsp`. It listens on 127.0.0.1 only, and
 // refuses a page served from another host, since a WebSocket is not held to the page's origin.
 // --trace prints the start of every chunk that passes, page to server as ">", back as "<".
+// --root starts the server in <dir> and lets the page read and save the files under it.
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const dash = process.argv.indexOf("--");
 const options = dash >= 0 ? process.argv.slice(2, dash) : process.argv.slice(2);
 const trace = options.includes("--trace");
-const port = Number(options.find((o) => /^\d+$/.test(o)) ?? 8766);
+const rootAt = options.indexOf("--root");
+const root = rootAt >= 0 ? realpathSync(resolve(options[rootAt + 1])) : null;
+const port = Number(options.find((o, i) => /^\d+$/.test(o) && i !== rootAt + 1) ?? 8766);
 const command = dash >= 0 ? process.argv.slice(dash + 1) : ["msc", "lsp"];
 const TRACE_BYTES = 300;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -43,8 +49,8 @@ function frame(opcode, payload) {
 
 function connect(socket) {
 	const child = process.platform === "win32"
-		? spawn(command.join(" "), { stdio: ["pipe", "pipe", "inherit"], shell: true })
-		: spawn(command[0], command.slice(1), { stdio: ["pipe", "pipe", "inherit"] });
+		? spawn(command.join(" "), { stdio: ["pipe", "pipe", "inherit"], shell: true, cwd: root ?? undefined })
+		: spawn(command[0], command.slice(1), { stdio: ["pipe", "pipe", "inherit"], cwd: root ?? undefined });
 	console.log(`bridge: started ${command.join(" ")} (pid ${child.pid})`);
 	let held = Buffer.alloc(0);
 	let message = [];
@@ -106,9 +112,54 @@ function connect(socket) {
 	});
 }
 
+function underRoot(relative) {
+	if (relative === null) return null;
+	try {
+		const path = realpathSync(resolve(root, relative));
+		return path.startsWith(root + sep) ? path : null;
+	} catch {
+		return null;
+	}
+}
+
+function answer(res, status, headers, body) {
+	res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", ...headers });
+	res.end(body);
+}
+
+function serveFile(req, res, url) {
+	const origin = req.headers.origin;
+	if (!fromThisMachine(origin)) return answer(res, 403, {}, `refused a page from ${origin}\n`);
+	const cors = origin === undefined ? {} : { "Access-Control-Allow-Origin": origin };
+	if (req.method === "OPTIONS") {
+		return answer(res, 204, { ...cors, "Access-Control-Allow-Methods": "GET, PUT", "Access-Control-Allow-Headers": "Content-Type" }, "");
+	}
+	if (root === null) return answer(res, 404, cors, "the bridge serves no files: start it with --root <dir>\n");
+	const path = underRoot(url.searchParams.get("path"));
+	if (path === null) return answer(res, 404, cors, `no file ${url.searchParams.get("path")} under ${root}\n`);
+	if (req.method === "GET") {
+		const text = readFileSync(path, "utf8");
+		const body = JSON.stringify({ uri: pathToFileURL(path).href, rootUri: pathToFileURL(root).href, text });
+		return answer(res, 200, { ...cors, "Content-Type": "application/json; charset=utf-8" }, body);
+	}
+	if (req.method !== "PUT") return answer(res, 405, cors, `no ${req.method} on a file\n`);
+	const chunks = [];
+	req.on("data", (chunk) => chunks.push(chunk));
+	req.on("end", () => {
+		try {
+			writeFileSync(`${path}.medic-save`, Buffer.concat(chunks));
+			renameSync(`${path}.medic-save`, path);
+			answer(res, 204, cors, "");
+		} catch (e) {
+			answer(res, 500, cors, `${e.message}\n`);
+		}
+	});
+}
+
 const server = createServer((req, res) => {
-	res.writeHead(426, { "Content-Type": "text/plain" });
-	res.end("medic lsp bridge: connect with a WebSocket\n");
+	const url = new URL(req.url, "http://127.0.0.1");
+	if (url.pathname === "/file") return serveFile(req, res, url);
+	answer(res, 426, {}, "medic lsp bridge: connect with a WebSocket\n");
 });
 server.on("upgrade", (req, socket) => {
 	const key = req.headers["sec-websocket-key"];
@@ -123,4 +174,5 @@ server.on("upgrade", (req, socket) => {
 	socket.setNoDelay(true);
 	connect(socket);
 });
-server.listen(port, "127.0.0.1", () => console.log(`bridge: ws://127.0.0.1:${port} runs ${command.join(" ")}`));
+server.listen(port, "127.0.0.1", () => console.log(`bridge: ws://127.0.0.1:${port} runs ${command.join(" ")}`
+	+ (root === null ? "" : ` in ${root}`)));
