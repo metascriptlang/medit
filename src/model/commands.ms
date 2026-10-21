@@ -3,6 +3,7 @@ import { Editor, mapThrough } from "./editor";
 import {
 	columnOf,
 	indentEnd,
+	isWordByte,
 	nextCluster,
 	offsetAtColumn,
 	prevCluster,
@@ -19,6 +20,16 @@ import { pairAround, typeText } from "./pairs";
 import { BracketPair, enclosingBrackets } from "./brackets";
 import { MenuMove } from "./completer";
 import { Expander } from "./expand";
+import { BlockComment } from "./language";
+import {
+	WordCase,
+	oppositeCase,
+	reversedLines,
+	sortedLines,
+	toWordCase,
+	toggledCase,
+	uniqueLines,
+} from "./transform";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
@@ -672,6 +683,160 @@ function toggleComments(e: Editor, cx: Context): void {
 	e.end();
 }
 
+struct CommentMarks {
+	openFrom: int32;
+	openTo: int32;
+	closeFrom: int32;
+	closeTo: int32;
+}
+
+function blockCommentAround(
+	doc: Document,
+	s: Sel,
+	open: string,
+	close: string,
+): CommentMarks | null {
+	const base = doc.lineStart(doc.lineOf(s.start()));
+	const region = doc.slice(base, doc.lineEnd(doc.lineOf(s.end())));
+	const start = s.start() - base;
+	const end = s.end() - base;
+	if (end < open.byteLength) { return null; }
+	const opener = region.byteLastIndexOf(open, end - open.byteLength);
+	if (opener < 0) { return null; }
+	const closer = region.byteIndexOf(close, opener + open.byteLength);
+	if (closer < 0) { return null; }
+	const closed = closer + close.byteLength;
+	const surrounds = opener <= start && closed >= end && start < closed;
+	const holds = start <= opener && closed <= end &&
+		region.byteSlice(start, opener).trim() == "" && region.byteSlice(closed, end).trim() == "";
+	if (!surrounds && !holds) { return null; }
+	let openTo = opener + open.byteLength;
+	if (openTo < region.byteLength && region.byteAt(openTo) == " ".code) { openTo += 1; }
+	let closeFrom = closer;
+	if (closeFrom > openTo && region.byteAt(closeFrom - 1) == " ".code) { closeFrom -= 1; }
+	return {
+		openFrom: base + opener,
+		openTo: base + openTo,
+		closeFrom: base + closeFrom,
+		closeTo: base + closed,
+	};
+}
+
+function toggleBlockComments(e: Editor, cx: Context): void {
+	if (e.blockComment === null) { return; }
+	const marks = e.blockComment as BlockComment;
+	const doc = e.doc;
+	const ranges = e.selections.ranges;
+	const edits: Edit[] = [];
+	const wrapAt: int32[] = [];
+	let lastTo = 0;
+	for (const s of ranges) {
+		const found = blockCommentAround(doc, s, marks.open.trimEnd(), marks.close.trimStart());
+		const from = found !== null ? (found as CommentMarks).openFrom : s.start();
+		wrapAt.push(found === null && from >= lastTo ? edits.length : -1);
+		if (from < lastTo) { continue; }
+		if (found !== null) {
+			const m = found as CommentMarks;
+			edits.push({ from: m.openFrom, to: m.openTo, text: "" });
+			edits.push({ from: m.closeFrom, to: m.closeTo, text: "" });
+			lastTo = m.closeTo;
+		} else {
+			edits.push({ from: s.start(), to: s.start(), text: marks.open });
+			edits.push({ from: s.end(), to: s.end(), text: marks.close });
+			lastTo = s.end();
+		}
+	}
+	if (edits.length == 0) { return; }
+	e.begin();
+	const applied = e.change(edits);
+	const next: Sel[] = [];
+	for (let i = 0; i < ranges.length; i++) {
+		const s = ranges[i];
+		const k = wrapAt[i];
+		if (k < 0) {
+			const anchor = mapThrough(s.anchor, applied, Bias.Left);
+			next.push(span(anchor, mapThrough(s.head, applied, Bias.Left)));
+			continue;
+		}
+		const from = applied[k].from;
+		const to = applied[k + 1].from + applied[k + 1].inserted;
+		next.push(s.anchor <= s.head ? span(from, to) : span(to, from));
+	}
+	e.select({ ranges: next, primary: e.selections.primary });
+	e.end();
+}
+
+function wordAround(doc: Document, at: int32): Sel {
+	let from = at;
+	while (from > 0 && isWordByte(doc.byteAt(from - 1))) { from -= 1; }
+	let to = at;
+	while (to < doc.length() && isWordByte(doc.byteAt(to))) { to += 1; }
+	return span(from, to);
+}
+
+function replaceTargets(e: Editor, targets: Sel[], texts: string[], primary: int32): void {
+	const edits: Edit[] = [];
+	const edited: int32[] = [];
+	let lastTo = 0;
+	for (let i = 0; i < targets.length; i++) {
+		const t = targets[i];
+		const changes = t.start() >= lastTo && texts[i] != e.doc.slice(t.start(), t.end());
+		edited.push(changes ? edits.length : -1);
+		if (changes) {
+			edits.push({ from: t.start(), to: t.end(), text: texts[i] });
+			lastTo = t.end();
+		}
+	}
+	e.begin();
+	const applied = e.change(edits);
+	const next: Sel[] = [];
+	for (let i = 0; i < targets.length; i++) {
+		const t = targets[i];
+		let from = mapThrough(t.start(), applied, Bias.Left);
+		let to = mapThrough(t.end(), applied, Bias.Left);
+		if (edited[i] >= 0) {
+			from = applied[edited[i]].from;
+			to = from + applied[edited[i]].inserted;
+		}
+		next.push(t.anchor <= t.head ? span(from, to) : span(to, from));
+	}
+	e.select({ ranges: next, primary });
+	e.end();
+}
+
+function convertCase(e: Editor, convert: (text: string) => string): void {
+	const targets: Sel[] = [];
+	const texts: string[] = [];
+	let changed = false;
+	for (const s of e.selections.ranges) {
+		const target = s.isEmpty() ? wordAround(e.doc, s.head) : s;
+		const old = e.doc.slice(target.start(), target.end());
+		const text = convert(old);
+		changed = changed || text != old;
+		targets.push(target);
+		texts.push(text);
+	}
+	if (changed) { replaceTargets(e, targets, texts, e.selections.primary); }
+}
+
+function rewriteLineGroups(e: Editor, rewrite: (lines: string[]) => string[]): void {
+	const doc = e.doc;
+	const targets: Sel[] = [];
+	const texts: string[] = [];
+	let primary = 0;
+	let i = 0;
+	for (const g of lineGroups(e, true)) {
+		const first = e.selections.ranges[i];
+		if (e.selections.primary >= i) { primary = targets.length; }
+		i += g.members;
+		const from = doc.lineStart(g.first);
+		const to = doc.lineEnd(g.last);
+		targets.push(first.anchor <= first.head ? span(from, to) : span(to, from));
+		texts.push(rewrite(doc.slice(from, to).split("\n")).join("\n"));
+	}
+	replaceTargets(e, targets, texts, primary);
+}
+
 function toEnclosingBracket(e: Editor, cx: Context): void {
 	const doc = e.doc;
 	reselect(e, (s: Sel): Sel => {
@@ -797,6 +962,31 @@ export function commands(): Map<string, Command> {
 	table.set("deleteLine", deleteLines);
 	table.set("joinLines", joinLines);
 	table.set("toggleComments", toggleComments);
+	table.set("toggleBlockComments", toggleBlockComments);
+	const caseBy = (convert: (text: string) => string): Command =>
+		(e: Editor, cx: Context): void => { convertCase(e, convert); };
+	const wordCase = (style: WordCase): Command =>
+		caseBy((text: string): string => toWordCase(text, style));
+	table.set("convertToUpperCase", caseBy((text: string): string => text.toUpperCase()));
+	table.set("convertToLowerCase", caseBy((text: string): string => text.toLowerCase()));
+	table.set("convertToTitleCase", wordCase(WordCase.Title));
+	table.set("convertToSnakeCase", wordCase(WordCase.Snake));
+	table.set("convertToKebabCase", wordCase(WordCase.Kebab));
+	table.set("convertToUpperCamelCase", wordCase(WordCase.UpperCamel));
+	table.set("convertToLowerCamelCase", wordCase(WordCase.LowerCamel));
+	table.set("convertToOppositeCase", caseBy(oppositeCase));
+	table.set("toggleCase", caseBy(toggledCase));
+	const linesBy = (rewrite: (lines: string[]) => string[]): Command =>
+		(e: Editor, cx: Context): void => { rewriteLineGroups(e, rewrite); };
+	const sorting = (ignoreCase: boolean): Command =>
+		linesBy((lines: string[]): string[] => sortedLines(lines, ignoreCase));
+	const unique = (ignoreCase: boolean): Command =>
+		linesBy((lines: string[]): string[] => uniqueLines(lines, ignoreCase));
+	table.set("sortLinesCaseSensitive", sorting(false));
+	table.set("sortLinesCaseInsensitive", sorting(true));
+	table.set("uniqueLinesCaseSensitive", unique(false));
+	table.set("uniqueLinesCaseInsensitive", unique(true));
+	table.set("reverseLines", linesBy(reversedLines));
 	table.set("tab", tab);
 	table.set("outdent", outdent);
 	table.set("indent", (e: Editor, cx: Context): void => { indent(e); });
@@ -1488,6 +1678,28 @@ test "outdent takes a tab or up to four spaces from each selected line" {
 	assert heads(e) == "0-4";
 }
 
+test "with a space indent, tab fills to the next stop, enter and indent add the unit, outdent takes it" {
+	const run = runner();
+	const e = editorAt("ab", [1]);
+	e.indent = "  ";
+	run(e, "tab");
+	assert e.doc.text() == "a b" && heads(e) == "2";
+	run(e, "tab");
+	assert e.doc.text() == "a   b" && heads(e) == "4";
+	const block = editorAt("if (x) {}", [8]);
+	block.indent = "    ";
+	run(block, "newline");
+	assert block.doc.text() == "if (x) {\n    \n}" && heads(block) == "13";
+	const lines = editorAt("a\n   b", [0]);
+	lines.indent = "  ";
+	lines.select({ ranges: [span(0, 6)], primary: 0 });
+	run(lines, "indent");
+	assert lines.doc.text() == "  a\n     b";
+	run(lines, "outdent");
+	run(lines, "outdent");
+	assert lines.doc.text() == "a\n b";
+}
+
 test "a triple-click selects the line with its break and a drag extends by lines" {
 	const e = editorAt("one\ntwo\nthree", [0]);
 	const g = press(e, 5, 3, false, false);
@@ -1700,25 +1912,188 @@ test "selection undo goes back through motions and leaves the text as it is" {
 	assert heads(e) == "3";
 	assert e.doc.text() == "oneX";
 }
-test "with a space indent, tab fills to the next stop, enter and indent add the unit, outdent takes it" {
+
+test "a case command converts the word around a caret and selects it, or the selection itself" {
 	const run = runner();
-	const e = editorAt("ab", [1]);
-	e.indent = "  ";
-	run(e, "tab");
-	assert e.doc.text() == "a b" && heads(e) == "2";
-	run(e, "tab");
-	assert e.doc.text() == "a   b" && heads(e) == "4";
-	const block = editorAt("if (x) {}", [8]);
-	block.indent = "    ";
-	run(block, "newline");
-	assert block.doc.text() == "if (x) {\n    \n}" && heads(block) == "13";
-	const lines = editorAt("a\n   b", [0]);
-	lines.indent = "  ";
-	lines.select({ ranges: [span(0, 6)], primary: 0 });
-	run(lines, "indent");
-	assert lines.doc.text() == "  a\n     b";
-	run(lines, "outdent");
-	run(lines, "outdent");
-	assert lines.doc.text() == "a\n b";
+	const e = editorAt("foo barBaz qux", [7]);
+	run(e, "convertToSnakeCase");
+	assert e.doc.text() == "foo bar_baz qux";
+	assert heads(e) == "4-11";
+	e.select({ ranges: [span(3, 0)], primary: 0 });
+	run(e, "convertToUpperCase");
+	assert e.doc.text() == "FOO bar_baz qux";
+	assert heads(e) == "3-0";
+	run(e, "undo");
+	assert e.doc.text() == "foo bar_baz qux";
+	const end = editorAt("abc def", [3]);
+	run(end, "convertToUpperCase");
+	assert end.doc.text() == "ABC def";
+	assert heads(end) == "0-3";
 }
 
+test "a case command that changes nothing leaves the carets where they are" {
+	const run = runner();
+	const e = editorAt("ABC  x", [1, 4]);
+	run(e, "convertToUpperCase");
+	assert heads(e) == "1,4";
+	run(e, "convertToLowerCase");
+	assert e.doc.text() == "abc  x";
+	assert heads(e) == "0-3,4";
+}
+
+test "case commands run at every cursor as one step, and two carets in one word convert it once" {
+	const run = runner();
+	const e = editorAt("one two", [1, 5]);
+	run(e, "convertToTitleCase");
+	assert e.doc.text() == "One Two";
+	assert heads(e) == "0-3,4-7";
+	run(e, "undo");
+	assert e.doc.text() == "one two";
+	const word = editorAt("hello", [1, 3]);
+	run(word, "convertToUpperCase");
+	assert word.doc.text() == "HELLO";
+	assert heads(word) == "0-5";
+}
+
+test "camel, kebab, opposite and toggled case follow one another on a selection" {
+	const run = runner();
+	const e = editorAt("foo_bar", [2]);
+	run(e, "convertToLowerCamelCase");
+	assert e.doc.text() == "fooBar";
+	run(e, "convertToUpperCamelCase");
+	assert e.doc.text() == "FooBar";
+	run(e, "convertToKebabCase");
+	assert e.doc.text() == "foo-bar";
+	assert heads(e) == "0-7";
+	run(e, "convertToOppositeCase");
+	assert e.doc.text() == "FOO-BAR";
+	run(e, "toggleCase");
+	assert e.doc.text() == "foo-bar";
+	run(e, "toggleCase");
+	assert e.doc.text() == "FOO-BAR";
+}
+
+test "sorting takes the whole lines a selection touches and selects them" {
+	const run = runner();
+	const e = editorAt("c\nb\na\nz", [0]);
+	e.select({ ranges: [span(1, 5)], primary: 0 });
+	run(e, "sortLinesCaseSensitive");
+	assert e.doc.text() == "a\nb\nc\nz";
+	assert heads(e) == "0-5";
+	run(e, "undo");
+	assert e.doc.text() == "c\nb\na\nz";
+	const one = editorAt("b\na", [1]);
+	run(one, "sortLinesCaseSensitive");
+	assert one.doc.text() == "b\na";
+	assert heads(one) == "0-1";
+	const back = editorAt("b\na", [0]);
+	back.select({ ranges: [span(3, 0)], primary: 0 });
+	run(back, "sortLinesCaseSensitive");
+	assert back.doc.text() == "a\nb";
+	assert heads(back) == "3-0";
+}
+
+test "line commands work on each block of lines, and neighbouring cursors form one block" {
+	const run = runner();
+	const e = editorAt("1\n2\n3\nx\n4\n5", [0]);
+	e.select({ ranges: [span(0, 3), span(8, 11)], primary: 1 });
+	run(e, "reverseLines");
+	assert e.doc.text() == "2\n1\n3\nx\n5\n4";
+	assert heads(e) == "0-3,8-11";
+	assert e.selections.primary == 1;
+	const near = editorAt("b\na\nc", [0, 2]);
+	run(near, "sortLinesCaseSensitive");
+	assert near.doc.text() == "a\nb\nc";
+	assert heads(near) == "0-3";
+}
+
+test "unique lines drop later repeats, a selection ending at a line start leaves that line out" {
+	const run = runner();
+	const e = editorAt("a\na\nb\nc\nc", [0]);
+	e.select({ ranges: [span(0, 5), span(8, 8)], primary: 0 });
+	run(e, "uniqueLinesCaseSensitive");
+	assert e.doc.text() == "a\nb\nc\nc";
+	assert heads(e) == "0-3,6-7";
+	const edge = editorAt("a\na\na", [0]);
+	edge.select({ ranges: [span(0, 4)], primary: 0 });
+	run(edge, "uniqueLinesCaseSensitive");
+	assert edge.doc.text() == "a\na";
+	assert heads(edge) == "0-1";
+}
+
+test "the case-insensitive line commands fold ASCII case and keep the first of equal lines" {
+	const run = runner();
+	const e = editorAt("b\nB\na\nA", [0]);
+	run(e, "selectAll");
+	run(e, "sortLinesCaseInsensitive");
+	assert e.doc.text() == "a\nA\nb\nB";
+	run(e, "uniqueLinesCaseInsensitive");
+	assert e.doc.text() == "a\nb";
+	assert heads(e) == "0-3";
+}
+
+test "a block comment wraps a selection, selected with its markers, and comes back off" {
+	const run = runner();
+	const e = editorAt("let x = 1 + 2;", [0]);
+	e.blockComment = { open: "/* ", close: " */" };
+	e.select({ ranges: [span(8, 9)], primary: 0 });
+	run(e, "toggleBlockComments");
+	assert e.doc.text() == "let x = /* 1 */ + 2;";
+	assert heads(e) == "8-15";
+	run(e, "toggleBlockComments");
+	assert e.doc.text() == "let x = 1 + 2;";
+	assert heads(e) == "8-9";
+	e.blockComment = null;
+	run(e, "toggleBlockComments");
+	assert e.doc.text() == "let x = 1 + 2;";
+}
+
+test "a caret inside a block comment takes it off, a caret outside one wraps an empty comment" {
+	const run = runner();
+	const e = editorAt("let x = /* 1 */ + 2;", [12]);
+	e.blockComment = { open: "/* ", close: " */" };
+	run(e, "toggleBlockComments");
+	assert e.doc.text() == "let x = 1 + 2;";
+	assert heads(e) == "9";
+	const empty = editorAt("ab", [1]);
+	empty.blockComment = { open: "/* ", close: " */" };
+	run(empty, "toggleBlockComments");
+	assert empty.doc.text() == "a/*  */b";
+	assert heads(empty) == "1-7";
+	run(empty, "toggleBlockComments");
+	assert empty.doc.text() == "ab";
+	assert heads(empty) == "1";
+}
+
+test "block comments span lines, wrap each selection, and one comment comes off once" {
+	const run = runner();
+	const e = editorAt("f {\n\tx;\n}", [0]);
+	e.blockComment = { open: "/* ", close: " */" };
+	e.select({ ranges: [span(0, 4)], primary: 0 });
+	run(e, "toggleBlockComments");
+	assert e.doc.text() == "/* f {\n */\tx;\n}";
+	assert heads(e) == "0-10";
+	run(e, "toggleBlockComments");
+	assert e.doc.text() == "f {\n\tx;\n}";
+	assert heads(e) == "0-4";
+	const two = editorAt("a b", [0]);
+	two.blockComment = { open: "/* ", close: " */" };
+	two.select({ ranges: [span(0, 1), span(2, 3)], primary: 0 });
+	run(two, "toggleBlockComments");
+	assert two.doc.text() == "/* a */ /* b */";
+	assert heads(two) == "0-7,8-15";
+	const inside = editorAt("/* ab */", [4, 5]);
+	inside.blockComment = { open: "/* ", close: " */" };
+	run(inside, "toggleBlockComments");
+	assert inside.doc.text() == "ab";
+	assert heads(inside) == "1,2";
+}
+
+test "a selection holding a block comment with only blanks around it takes the comment off" {
+	const run = runner();
+	const e = editorAt(" /* a */ ", [0]);
+	e.blockComment = { open: "/* ", close: " */" };
+	e.select({ ranges: [span(0, 9)], primary: 0 });
+	run(e, "toggleBlockComments");
+	assert e.doc.text() == " a ";
+}

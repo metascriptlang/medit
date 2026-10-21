@@ -109,6 +109,7 @@ export function defaultKeymap(): Keymap {
 		["alt+shift+ArrowUp", "duplicateLineUp"], ["alt+shift+ArrowDown", "duplicateLineDown"],
 		["ctrl+shift+j", "joinLines"],
 		["ctrl+shift+k", "deleteLine"], ["ctrl+/", "toggleComments"], ["ctrl+k ctrl+c", "toggleComments"],
+		["alt+shift+a", "toggleBlockComments"], ["ctrl+k ctrl+/", "toggleBlockComments"],
 		["Enter", "newline"], ["shift+Enter", "newline"], ["NumpadEnter", "newline"],
 		["Tab", "tab"], ["shift+Tab", "outdent"],
 		["ctrl+]", "indent"], ["ctrl+[", "outdent"],
@@ -241,6 +242,15 @@ test "the default map binds line, occurrence, subword, scroll and selection hist
 	assert chord(m, at("PageDown", false, true, false)) == "scrollPageDown";
 	assert chord(m, at("u", true, false, false)) == "undoSelection";
 	assert chord(m, at("U", true, false, true)) == "redoSelection";
+}
+
+test "shift+alt+a and ctrl+k ctrl+/ toggle block comments" {
+	const m = defaultKeymap();
+	const at = (key: string, ctrl: boolean, alt: boolean, shift: boolean): KeyPress =>
+		({ key, ctrl, alt, shift, meta: false });
+	assert chord(m, at("A", false, true, true)) == "toggleBlockComments";
+	assert chord(m, at("k", true, false, false)) == "Pending";
+	assert chord(m, at("/", true, false, false)) == "toggleBlockComments";
 }
 
 test "the default map binds editing keys" {
