@@ -41,8 +41,13 @@ const CLIENT_CAPABILITIES = "{"
 	+ "}";
 
 const FENCE = "```";
-const FORMATTING_OPTIONS = `{"tabSize":${TAB_SIZE},"insertSpaces":false,"trimTrailingWhitespace":true,`
-	+ `"insertFinalNewline":true,"trimFinalNewlines":true}`;
+const AS_IS: int32 = 1;
+const ADJUST_INDENTATION: int32 = 2;
+function formattingOptions(indent: string): string {
+	const spaces = indent != "\t";
+	return `{"tabSize":${spaces ? indent.byteLength : TAB_SIZE},"insertSpaces":${spaces},"trimTrailingWhitespace":true,`
+		+ `"insertFinalNewline":true,"trimFinalNewlines":true}`;
+}
 
 export enum State {
 	Starting,
@@ -581,10 +586,10 @@ export class Server {
 
 	// The edits that format the document, or the range of it, offsets as the document is when
 	// they arrive; `done` gets the server's message instead when it refuses.
-	format(doc: Document, range: Span | null, done: (edits: Edit[] | null, error: string | null) => void): int32 {
+	format(doc: Document, range: Span | null, indent: string, done: (edits: Edit[] | null, error: string | null) => void): int32 {
 		const whole = range === null;
 		if (!this.provides(whole ? "documentFormattingProvider" : "documentRangeFormattingProvider")) { return -1; }
-		let params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"options":${FORMATTING_OPTIONS}`;
+		let params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"options":${formattingOptions(indent)}`;
 		if (range !== null) {
 			const r: Range = { start: doc.positionOf((range as Span).from), end: doc.positionOf((range as Span).to) };
 			params += `,"range":${JSON.stringify<Range>(r)}`;
@@ -1042,7 +1047,7 @@ when (testBuild) {
 		const [server, wire, d] = completing("a  =1\n");
 		let got: Edit[] = [];
 		let error: string | null = null;
-		const id = server.format(d, null, (edits: Edit[] | null, e: string | null): void => {
+		const id = server.format(d, null, "\t", (edits: Edit[] | null, e: string | null): void => {
 			if (edits !== null) { got = edits as Edit[]; }
 			error = e;
 		});
@@ -1052,8 +1057,9 @@ when (testBuild) {
 		server.receive(reply(id, "[{\"range\":{\"start\":{\"line\":0,\"character\":1},\"end\":{\"line\":0,\"character\":3}},\"newText\":\" \"}]"));
 		assert got.length == 1 && got[0].from == 2 && got[0].to == 4 && error === null;
 		const part: Span = { from: 0, to: 2 };
-		assert server.format(d, part, (edits: Edit[] | null, e: string | null): void => {}) == -1;
-		const fid = server.format(d, null, (edits: Edit[] | null, e: string | null): void => { error = e; });
+		assert server.format(d, part, "\t", (edits: Edit[] | null, e: string | null): void => {}) == -1;
+		const fid = server.format(d, null, "  ", (edits: Edit[] | null, e: string | null): void => { error = e; });
+		assert wire.sent[wire.sent.length - 1].includes("\"tabSize\":2,\"insertSpaces\":true");
 		server.receive(framed(`{"jsonrpc":"2.0","id":${fid},"error":{"code":-32603,"message":"cannot parse"}}`));
 		assert error !== null && (error as string) == "cannot parse";
 	}

@@ -115,11 +115,11 @@ export class Session {
 			.concat(this.server.triggers("signatureHelpProvider", "retriggerCharacters"));
 	}
 
-	format(range: [int32, int32] | null, done: (edits: Edit[] | null, error: string | null) => void): int32 {
-		if (range === null) { return this.server.format(this.doc, null, done); }
+	format(range: [int32, int32] | null, indent: string, done: (edits: Edit[] | null, error: string | null) => void): int32 {
+		if (range === null) { return this.server.format(this.doc, null, indent, done); }
 		const [from, to] = range as [int32, int32];
 		const span: Span = { from, to };
-		return this.server.format(this.doc, span, done);
+		return this.server.format(this.doc, span, indent, done);
 	}
 
 	documentHighlight(offset: int32, done: (found: Occurrence[] | null) => void): int32 {
