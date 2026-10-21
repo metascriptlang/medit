@@ -78,9 +78,12 @@ export function cardOf(diagnostics: Diagnostic[], markdown: string, columns: int
 	return { rows: rows.slice(0, MAX_ROWS), columns: widest };
 }
 
+export function cardSize(card: Card, rowHeight: float64, cellWidth: float64): [float64, float64] {
+	return [(card.columns + 2 * INSET_CELLS) * cellWidth + 2 * BORDER, card.rows.length * rowHeight + 2 * BORDER];
+}
+
 export function placed(card: Card, x: float64, rowTop: float64, rowHeight: float64, cellWidth: float64, areaWidth: float64): Box {
-	const width = (card.columns + 2 * INSET_CELLS) * cellWidth + 2 * BORDER;
-	const height = card.rows.length * rowHeight + 2 * BORDER;
+	const [width, height] = cardSize(card, rowHeight, cellWidth);
 	const above = rowTop - height - GAP;
 	return {
 		x: Math.max(0, Math.min(x, areaWidth - width)),
