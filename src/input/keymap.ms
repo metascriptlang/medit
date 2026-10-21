@@ -111,6 +111,7 @@ export function defaultKeymap(): Keymap {
 		["ctrl+Space", "showCompletions"], ["ctrl+i", "showSignatureHelp"], ["ctrl+shift+Space", "showSignatureHelp"],
 		["alt+shift+f", "format"], ["ctrl+k ctrl+f", "formatSelections"],
 		["F2", "rename"], ["shift+F12", "findReferences"], ["alt+shift+F12", "findReferences"],
+		["ctrl+shift+o", "outline"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;
