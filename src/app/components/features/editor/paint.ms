@@ -1,12 +1,13 @@
 import { TextSpan } from "../../../../../../neon/src/render/hostTypes";
 import { Style } from "../../../../../../neon/src/render/style";
 import { Document } from "../../../../model/document";
-import { Sel, Selections, end, isEmpty, primaryRange, start } from "../../../../model/selection";
+import { Sel, Selections, end, isEmpty, primaryRange, span, start } from "../../../../model/selection";
 import { cellsBetween } from "../../../../model/motion";
 import { Viewport } from "../../../../view/viewport";
 import { Mark, Piece, VisualRow, cellIn, holds, rowPieces, rowsOf } from "../../../../view/wrap";
 import { Diagnostic, Severity } from "../../../../model/diagnostics";
 import { Syntax } from "../../../../syntax/syntax";
+import { Occurrence } from "../../../../model/occurrences";
 import {
 	CARET,
 	BRACKET,
@@ -14,6 +15,8 @@ import {
 	CURRENT_NUMBER,
 	MATCH,
 	MUTED,
+	READ_HIGHLIGHT,
+	WRITE_HIGHLIGHT,
 	FADED_ALPHA,
 	SELECTION,
 	colorOf,
@@ -76,6 +79,7 @@ export function painted(
 	selections: Selections,
 	marks: Sel[],
 	brackets: Sel[],
+	occurrences: Occurrence[],
 	frame: VisualRow[],
 	view: Viewport,
 	syntax: Syntax | null,
@@ -133,6 +137,7 @@ export function painted(
 	const shades: Box[] = [];
 	const carets: Box[] = [];
 	let primary: Box | null = null;
+	for (const o of occurrences) { shade(span(o.from, o.to), o.write ? WRITE_HIGHLIGHT : READ_HIGHLIGHT, found); }
 	for (const m of marks) { shade(m, MATCH, found); }
 	for (const b of brackets) { shade(b, BRACKET, found); }
 	for (const s of selections.ranges) {

@@ -22,11 +22,13 @@ import {
 import { Completer, MenuMove, Provider } from "../../../../model/completer";
 import { Completion, queryAt } from "../../../../model/completion";
 import { SignatureAsk, SignatureHelp, SignatureHelper, SignatureProvider } from "../../../../model/signatures";
+import { Formatter } from "../../../../model/format";
+import { Occurrence, Occurrences } from "../../../../model/occurrences";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
-import { Document } from "../../../../model/document";
+import { Document, Edit } from "../../../../model/document";
 import { Tone } from "../../../../view/tone";
 import { Diagnostic } from "../../../../model/diagnostics";
 import { offsetAtCell } from "../../../../model/motion";
@@ -151,6 +153,14 @@ export function EditorPane(props: {
 		triggers: (): string[] => session === null ? [] : (session as Session).signatureTriggers(),
 	};
 	const signer = new SignatureHelper(editor, signatureProvider, (): void => { signChanged(); });
+	let occurrencesChanged: () => void = (): void => {};
+	const occurrences = new Occurrences(editor, {
+		ask: (offset: int32, done: (found: Occurrence[] | null) => void): int32 =>
+			session === null ? -1 : (session as Session).documentHighlight(offset, done),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+		wait: (ms: int32, run: () => void): int32 => setTimeout(run, ms) as int32,
+		stopWaiting: (timer: int32): void => { clearTimeout(timer); },
+	}, (): void => { occurrencesChanged(); });
 	const extension = props.path.lastIndexOf(".") < 0 ? "" : props.path.slice(props.path.lastIndexOf(".") + 1);
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
@@ -300,7 +310,8 @@ export function EditorPane(props: {
 		fit();
 		if (session !== null) { (session as Session).edited(); }
 		frame = framed(doc, view, wrapWidth());
-		const p = painted(doc, editor.selections, marked(), bracketed(), frame, view, syntax, visibleDiagnostics(), grid);
+		const shownOccurrences = frame.length == 0 ? [] : occurrences.within(frame[0].from, frame[frame.length - 1].to);
+		const p = painted(doc, editor.selections, marked(), bracketed(), shownOccurrences, frame, view, syntax, visibleDiagnostics(), grid);
 		fill(rows, p.rows);
 		fill(shades, p.shades);
 		fill(carets, p.carets);
@@ -424,6 +435,22 @@ export function EditorPane(props: {
 		if (completer.shown()) { hideCard(); }
 		if (grid.cellWidth > 0) { paint(); }
 	};
+	const formatter = new Formatter(editor, {
+		format: (range: [int32, int32] | null, done: (edits: Edit[] | null, error: string | null) => void): int32 =>
+			session === null ? -1 : (session as Session).format(range, (edits: Edit[] | null, error: string | null): void => {
+				done(edits, error);
+				paint();
+			}),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+		wait: (ms: int32, run: () => void): int32 => setTimeout(run, ms) as int32,
+		stopWaiting: (timer: int32): void => { clearTimeout(timer); },
+	}, (message: string): void => {
+		notice = message;
+		paint();
+	});
+	occurrencesChanged = (): void => {
+		if (grid.cellWidth > 0) { paint(); }
+	};
 	signChanged = (): void => {
 		if (grid.cellWidth > 0) { paint(); }
 	};
@@ -511,6 +538,7 @@ export function EditorPane(props: {
 		showSignatureHelp: (): void => { signer.invoke(); },
 		cycleSignature: (forward: boolean): void => { signer.cycle(forward); },
 		hideSignatureHelp: (): void => { signer.dismiss(); },
+		format: (selections: boolean): void => { formatter.run(selections); },
 		goToLine: (): void => {
 			goingFrom = view;
 			setGoingTo(true);
@@ -554,6 +582,7 @@ export function EditorPane(props: {
 		if (!menuCommands.has(name) && !signatureCommands.has(name)) {
 			completer.moved();
 			signer.moved(null);
+			occurrences.moved();
 		}
 		reveal();
 		if (after !== null) {
@@ -589,6 +618,7 @@ export function EditorPane(props: {
 			reveal();
 			completer.typed(e.text);
 			signer.moved(e.text);
+			occurrences.moved();
 		}
 	};
 
@@ -599,6 +629,7 @@ export function EditorPane(props: {
 		reveal();
 		completer.typed(e.text);
 		signer.moved(e.text);
+		occurrences.moved();
 	};
 
 	const offsetAt = (e: NeonEvent): int32 => {
@@ -629,6 +660,7 @@ export function EditorPane(props: {
 		lastOffset = offset;
 		gesture = press(editor, offset, clicks, e.shiftKey, e.altKey);
 		signer.moved(null);
+		occurrences.moved();
 		paint();
 	};
 
@@ -645,6 +677,7 @@ export function EditorPane(props: {
 		}
 		drag(editor, gesture as Gesture, offsetAt(e));
 		signer.moved(null);
+		occurrences.moved();
 		reveal();
 	};
 
