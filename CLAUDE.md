@@ -53,6 +53,12 @@ usual.
   A server's positions name the document version they were computed on; `DocumentSync` keeps the last
   `KEPT_VERSIONS` texts sent and maps through the edits since, and drops a reply whose version
   it no longer holds.
+- A rename or code action whose edit also reaches files that are not open opens them as tabs
+  behind the active one and edits them there, unsaved, each with its own undo.
+- Find in project (ctrl+shift+f, `src/model/projectSearch.ms`) searches the project's files on the
+  UI thread, an open file's unsaved text in place of its disk text, up to `MAX_RESULT_HITS` matches
+  in `MAX_RESULT_FILES` files. The web build has the bridge search the files on disk
+  (`GET /search`, the same matching repeated in node) and searches its open files itself.
 - A save trims trailing whitespace and ends the file with one newline, in one undo step, unless an
   `.editorconfig` section says otherwise. The desktop reads every `.editorconfig` from the file's
   directory up to the drive; the web build reads those under the bridge's `--root` only.
@@ -83,7 +89,7 @@ Run from the repository root: fonts are loaded by relative path.
   server sees only through the protocol. With `--root`, the server starts in `<dir>` and
   `index.html?lsp=...&file=<path under dir>` opens and saves that file through the bridge, so the
   server reads it and its imports from disk; without `&file=` the page opens with no tab and ctrl+p
-  lists the files under `<dir>`. The bridge answers pages served from this machine only.
+  lists the files under `<dir>`, which ctrl+shift+f searches. The bridge answers pages served from this machine only.
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
   header; `hold:ctrl` keeps a modifier down across the steps that follow, as the ctrl+tab switcher
   needs). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
