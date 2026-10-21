@@ -19,7 +19,9 @@ import {
 	insertText,
 	press,
 } from "../../../../model/commands";
-import { Outcome, defaultKeymap } from "../../../../input/keymap";
+import { Completer, MenuMove, Provider } from "../../../../model/completer";
+import { Completion, queryAt } from "../../../../model/completion";
+import { KeyPress, Outcome, completionKeymap, defaultKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
@@ -30,7 +32,7 @@ import { offsetAtCell } from "../../../../model/motion";
 import { Session } from "../../../../lsp/session";
 import { Span, Target } from "../../../../lsp/server";
 import { filePath } from "../../../../lsp/uri";
-import { CARET, FONT_SIZE, MUTED, PANEL } from "../../../theme";
+import { CARET, FONT_SIZE, MUTED, PANEL, SELECTION } from "../../../theme";
 import { caretPlace, goToHelp, statusLine } from "../../../../view/status";
 import { Box, Overlay } from "../../ui/overlay";
 import { LineRow, Row } from "../../content/lineRow";
@@ -38,7 +40,8 @@ import { Preedit } from "../../content/preedit";
 import { FindBar } from "../find/findBar";
 import { createFinder } from "../find/finder";
 import { GoToBar } from "../goto/goToBar";
-import { HoverCard, cardOf, placed } from "../hover/hoverCard";
+import { HoverCard, cardOf, cardSize, placed } from "../hover/hoverCard";
+import { CompletionMenu, MENU_BORDER, MENU_ROWS, menuColumns, menuPlaced, menuRows, scrolledTop } from "../completion/completionMenu";
 import { createBlink } from "./blink";
 import { Grid, framed, gutterWidth, painted } from "./paint";
 
@@ -46,6 +49,9 @@ const PROBE = "MMMMMMMMMM";
 const MULTI_CLICK_MS: float64 = 400;
 const HOVER_DELAY_MS: float64 = 300;
 const METASCRIPT = "metascript";
+const ASIDE_GAP: float64 = 4;
+const ASIDE_MIN_COLUMNS: int32 = 30;
+const ASIDE_MAX_COLUMNS: int32 = 60;
 
 function printable(text: string): boolean {
 	return text.length > 0 && text.charCodeAt(0) >= 32 && text.charCodeAt(0) != 127;
@@ -108,6 +114,25 @@ export function EditorPane(props: {
 	let hoverAsked = -1;
 	let hoverPoint = -1;
 	let active: Diagnostic | null = null;
+	const menuKeys = completionKeymap();
+	const [menued, setMenued] = createSignal<boolean>(false);
+	const [menuBox, setMenuBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const [menuPick, setMenuPick] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const menuLines: List<Row> = createList<Row>([]);
+	let menuTop = 0;
+	const [asided, setAsided] = createSignal<boolean>(false);
+	const [asideBox, setAsideBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const asideRows: List<Row> = createList<Row>([]);
+	let menuChanged: () => void = (): void => {};
+	const provider: Provider = {
+		ask: (offset: int32, trigger: string | null, done: (items: Completion[], incomplete: boolean) => void): int32 =>
+			session === null ? -1 : (session as Session).completion(offset, trigger, done),
+		resolve: (item: Completion, done: (resolved: Completion) => void): boolean =>
+			session !== null && (session as Session).resolveCompletion(item, done) >= 0,
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+		triggers: (): string[] => session === null ? [] : (session as Session).completionTriggers(),
+	};
+	const completer = new Completer(editor, provider, (): void => { menuChanged(); });
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
 	const rowsIn = (line: int32): int32 => rowsOf(doc, line, wrapWidth()).length as int32;
@@ -164,6 +189,74 @@ export function EditorPane(props: {
 		return (session as Session).diagnostics.within(doc, frame[0].from, frame[frame.length - 1].to);
 	};
 
+	let fenceDoc: Document | null = null;
+	let fenceSyntax: Syntax | null = null;
+	const highlight = (source: string, language: string): Tone[] | null => {
+		if (language != METASCRIPT && !covers(`.${language}`)) { return null; }
+		if (fenceSyntax === null) {
+			fenceDoc = new Document("");
+			fenceSyntax = new Syntax();
+		}
+		const d = fenceDoc as Document;
+		const _old = d.splice({ from: 0, to: d.length(), text: source });
+		return (fenceSyntax as Syntax).tonesIn(d, 0, d.length());
+	};
+
+	const placeAside = (menu: Box, above: boolean): void => {
+		const item = completer.selectedItem();
+		const text = item === null ? "" : (item as Completion).documentation;
+		const right = areaWidth - menu.x - menu.width - ASIDE_GAP;
+		const left = menu.x - ASIDE_GAP;
+		const room = Math.floor(Math.max(right, left) / grid.cellWidth) as int32;
+		if (text.trim().byteLength == 0 || room < ASIDE_MIN_COLUMNS) {
+			if (asided()) { setAsided(false); }
+			return;
+		}
+		const card = cardOf([], text, Math.min(room, ASIDE_MAX_COLUMNS), highlight);
+		const [width, height] = cardSize(card, grid.rowHeight, grid.cellWidth);
+		setAsideBox({
+			x: right >= left ? menu.x + menu.width + ASIDE_GAP : menu.x - ASIDE_GAP - width,
+			y: above ? Math.max(0, menu.y + menu.height - height) : menu.y,
+			width,
+			height,
+			color: PANEL,
+		});
+		fill(asideRows, card.rows);
+		setAsided(true);
+	};
+
+	const placeMenu = (): void => {
+		let row = -1;
+		const head = editor.selections.primaryRange().head;
+		const query = queryAt(doc, head);
+		const word = query === null ? head : head - ((query as string).byteLength as int32);
+		for (let k = 0; k < (frame.length as int32) && row < 0 && completer.shown(); k++) {
+			if (frame[k].holds(word)) { row = k; }
+		}
+		if (row < 0 || grid.cellWidth <= 0) {
+			if (menued()) { setMenued(false); }
+			if (asided()) { setAsided(false); }
+			return;
+		}
+		const total = completer.choices.length as int32;
+		const columns = menuColumns(completer.items, completer.choices);
+		const cell = Math.max(0, cellIn(doc, frame[row], word) - view.left);
+		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
+		const place = menuPlaced(columns, Math.min(total, MENU_ROWS), x, row, view.rows, grid.rowHeight, grid.cellWidth, areaWidth, PANEL);
+		menuTop = scrolledTop(menuTop, completer.selected, place.rows, total);
+		fill(menuLines, menuRows(completer.items, completer.choices, menuTop, place.rows, columns));
+		setMenuPick({
+			x: 0,
+			y: (completer.selected - menuTop) * grid.rowHeight,
+			width: place.box.width - 2 * MENU_BORDER,
+			height: grid.rowHeight,
+			color: SELECTION,
+		});
+		setMenuBox(place.box);
+		setMenued(true);
+		placeAside(place.box, place.above);
+	};
+
 	const paint = (): void => {
 		fit();
 		if (session !== null) { (session as Session).edited(); }
@@ -174,6 +267,7 @@ export function EditorPane(props: {
 		fill(carets, p.carets);
 		if (p.primary !== null) { setCaret(p.primary); }
 		blink.restart();
+		placeMenu();
 		report();
 	};
 
@@ -204,19 +298,6 @@ export function EditorPane(props: {
 		hoverPoint = -1;
 		cardOver = null;
 		if (carded()) { setCarded(false); }
-	};
-
-	let fenceDoc: Document | null = null;
-	let fenceSyntax: Syntax | null = null;
-	const highlight = (source: string, language: string): Tone[] | null => {
-		if (language != METASCRIPT && !covers(`.${language}`)) { return null; }
-		if (fenceSyntax === null) {
-			fenceDoc = new Document("");
-			fenceSyntax = new Syntax();
-		}
-		const d = fenceDoc as Document;
-		const _old = d.splice({ from: 0, to: d.length(), text: source });
-		return (fenceSyntax as Syntax).tonesIn(d, 0, d.length());
 	};
 
 	const showCard = (anchor: int32, diagnostics: Diagnostic[], markdown: string): void => {
@@ -263,13 +344,15 @@ export function EditorPane(props: {
 		return at >= r.to ? -1 : at;
 	};
 
-	const overCard = (e: NeonEvent): boolean => {
-		const b = cardBox();
-		return carded() && e.locationX >= b.x && e.locationX < b.x + b.width && e.locationY >= b.y && e.locationY < b.y + b.height;
-	};
+	const inside = (b: Box, e: NeonEvent): boolean =>
+		e.locationX >= b.x && e.locationX < b.x + b.width && e.locationY >= b.y && e.locationY < b.y + b.height;
+
+	const overMenu = (e: NeonEvent): boolean => menued() && inside(menuBox(), e);
+
+	const overCard = (e: NeonEvent): boolean => carded() && inside(cardBox(), e);
 
 	const hovered = (e: NeonEvent): void => {
-		if (overCard(e)) { return; }
+		if (overCard(e) || overMenu(e)) { return; }
 		const at = offsetUnder(e);
 		if (cardOver !== null && at >= (cardOver as Span).from && at < (cardOver as Span).to) { return; }
 		if (at >= 0 && at == hoverPoint) { return; }
@@ -296,6 +379,13 @@ export function EditorPane(props: {
 		if (row >= 0) { view = { ...view, line: Math.max(0, doc.lineOf(here.from) - row), sub: 0 }; }
 		reveal();
 	};
+
+	menuChanged = (): void => {
+		if (completer.shown()) { hideCard(); }
+		if (grid.cellWidth > 0) { paint(); }
+	};
+	const menuCommands = new Set<string>(menuKeys.commands());
+	menuCommands.add("showCompletions");
 
 	const cx: Context = {
 		pageRows: (): int32 => Math.max(1, view.rows - 1),
@@ -362,6 +452,15 @@ export function EditorPane(props: {
 				showCard(d.from, [d], "");
 			};
 		},
+		showCompletions: (): void => { completer.update(null); },
+		completionMenu: (move: MenuMove): void => { completer.move(move); },
+		confirmCompletion: (replace: boolean | null): void => {
+			const skipped = completer.confirm(replace);
+			if (skipped !== null && (skipped as int32) > 0) {
+				notice = `left out ${skipped as int32} edit${skipped == 1 ? "" : "s"} the completion brought that overlap it`;
+			}
+		},
+		hideCompletions: (): void => { completer.hide(); },
 		goToLine: (): void => {
 			goingFrom = view;
 			setGoingTo(true);
@@ -402,6 +501,7 @@ export function EditorPane(props: {
 			return;
 		}
 		command(editor, cx);
+		if (!menuCommands.has(name)) { completer.moved(); }
 		reveal();
 		if (after !== null) {
 			const then = after as () => void;
@@ -414,17 +514,20 @@ export function EditorPane(props: {
 		if (e.isComposing) { return; }
 		hideCard();
 		notice = null;
-		const r = keymap.feed({
-			key: e.key,
-			ctrl: e.ctrlKey,
-			alt: e.altKey,
-			shift: e.shiftKey,
-			meta: e.metaKey,
-		});
+		const key: KeyPress = { key: e.key, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
+		if (completer.shown() && keymap.pendingChords() == "") {
+			const m = menuKeys.feed(key);
+			if (m.outcome == Outcome.Run) {
+				run(m.command);
+				return;
+			}
+		}
+		const r = keymap.feed(key);
 		if (r.outcome == Outcome.Run) { run(r.command); }
 		else if (r.outcome == Outcome.Unbound && printable(e.text)) {
 			insertText(editor, e.text);
 			reveal();
+			completer.typed(e.text);
 		}
 	};
 
@@ -433,6 +536,7 @@ export function EditorPane(props: {
 		if (e.text == "") { return; }
 		insertText(editor, e.text);
 		reveal();
+		completer.typed(e.text);
 	};
 
 	const offsetAt = (e: NeonEvent): int32 => {
@@ -450,6 +554,12 @@ export function EditorPane(props: {
 	const pressed = (e: NeonEvent): void => {
 		hideCard();
 		if (grid.cellWidth <= 0 || e.button != 1) { return; }
+		if (overMenu(e)) {
+			completer.pick(menuTop + (Math.floor((e.locationY - menuBox().y - MENU_BORDER) / grid.rowHeight) as int32));
+			run("confirmCompletion");
+			return;
+		}
+		completer.hide();
 		const offset = offsetAt(e);
 		const now = Date.now();
 		clicks = now - lastPress < MULTI_CLICK_MS && offset == lastOffset ? clicks % 3 + 1 : 1;
@@ -577,6 +687,21 @@ export function EditorPane(props: {
 				shown={carded()}
 				box={cardBox()}
 				rows={cardRows}
+				cellWidth={drawn().cellWidth}
+				rowHeight={drawn().rowHeight}
+			/>
+			<CompletionMenu
+				shown={menued()}
+				box={menuBox()}
+				selected={menuPick()}
+				rows={menuLines}
+				cellWidth={drawn().cellWidth}
+				rowHeight={drawn().rowHeight}
+			/>
+			<HoverCard
+				shown={asided()}
+				box={asideBox()}
+				rows={asideRows}
 				cellWidth={drawn().cellWidth}
 				rowHeight={drawn().rowHeight}
 			/>
