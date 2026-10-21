@@ -59,7 +59,7 @@ for (let frame = 0; frame < FRAMES; frame++) {
 	for (let at = view.line; at < doc.lineCount() && drawn < ROWS; at++) {
 		const rows = rowsOf(doc, at, COLS);
 		for (let k = at == view.line ? view.sub : 0; k < rows.length && drawn < ROWS; k++) {
-			for (const piece of rowPieces(doc, rows[k], 0, COLS, [], 0)) {
+			for (const piece of rowPieces(doc, rows[k], 0, COLS, [], 0, [])) {
 				sum += piece.text.byteLength;
 			}
 			drawn += 1;
