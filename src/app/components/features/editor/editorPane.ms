@@ -27,11 +27,12 @@ import { Occurrence, Occurrences } from "../../../../model/occurrences";
 import { Renamer, Renaming } from "../../../../model/rename";
 import { Place, References } from "../../../../model/references";
 import { Outline, OutlineItem } from "../../../../model/outline";
+import { NavHistory, Spot } from "../../../../model/history";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, referencesKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
-import { Document, Edit } from "../../../../model/document";
+import { Bias, Document, Edit } from "../../../../model/document";
 import { Tone } from "../../../../view/tone";
 import { Diagnostic } from "../../../../model/diagnostics";
 import { offsetAtCell } from "../../../../model/motion";
@@ -138,6 +139,7 @@ export function EditorPane(props: {
 	let outlineHead = -1;
 	let placeOutline: () => void = (): void => {};
 	let outlineChanged: () => void = (): void => {};
+	let listing: () => boolean = (): boolean => false;
 	let goingFrom: Viewport | null = null;
 	let goText = "";
 	let notice: string | null = null;
@@ -193,6 +195,11 @@ export function EditorPane(props: {
 		wait: (ms: int32, run: () => void): int32 => setTimeout(run, ms) as int32,
 		stopWaiting: (timer: int32): void => { clearTimeout(timer); },
 	}, (): void => { occurrencesChanged(); });
+	const history = new NavHistory(doc);
+	let seenAt = 0;
+	let seenVersion = doc.version();
+	let seenTop = 0;
+	let jumping = false;
 	const extension = props.path.lastIndexOf(".") < 0 ? "" : props.path.slice(props.path.lastIndexOf(".") + 1);
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
@@ -340,6 +347,15 @@ export function EditorPane(props: {
 
 	const paint = (): void => {
 		fit();
+		if (!listing()) {
+			const was = doc.offsetSince(seenVersion, seenAt, Bias.Left);
+			const head = editor.selections.primaryRange().head;
+			if (was !== null) { history.moved({ at: was as int32, top: seenTop }, head, jumping); }
+			jumping = false;
+			seenAt = head;
+			seenVersion = doc.version();
+			seenTop = view.line;
+		}
 		if (session !== null) { (session as Session).edited(); }
 		frame = framed(doc, view, wrapWidth());
 		const shownOccurrences = frame.length == 0 ? [] : occurrences.within(frame[0].from, frame[frame.length - 1].to);
@@ -463,6 +479,7 @@ export function EditorPane(props: {
 		const oneLine = doc.lineOf(here.from) == doc.lineOf(here.to);
 		editor.select({ ranges: [oneLine ? span(here.from, here.to) : span(here.from, here.from)], primary: 0 });
 		if (row >= 0) { view = { ...view, line: Math.max(0, doc.lineOf(here.from) - row), sub: 0 }; }
+		jumping = true;
 		reveal();
 	};
 
@@ -560,6 +577,7 @@ export function EditorPane(props: {
 		notice = message;
 		paint();
 	}, (): void => { outlineChanged(); });
+	listing = (): boolean => outline.shown() || references.shown();
 	outlineChanged = (): void => {
 		if (!outline.shown()) {
 			if (outlined()) {
@@ -725,6 +743,17 @@ export function EditorPane(props: {
 			completer.hide();
 			references.close();
 			outline.open();
+		},
+		navigate: (back: boolean): void => {
+			const here: Spot = { at: editor.selections.primaryRange().head, top: view.line };
+			const to = back ? history.back(here) : history.onward(here);
+			if (to === null) { return; }
+			const s = to as Spot;
+			editor.select(single(s.at));
+			view = { ...view, line: Math.min(s.top, doc.lineCount() - 1), sub: 0 };
+			seenAt = s.at;
+			seenVersion = doc.version();
+			reveal();
 		},
 		goToLine: (): void => {
 			goingFrom = view;
