@@ -10,7 +10,7 @@ int64_t socketSend(const uint8_t* data, int64_t len);
 int socketState(void);
 void socketClose(void);
 msString pageQuery(const char* name);
-msString fileRequest(const char* method, const char* base, const char* path, const uint8_t* body, int64_t len);
-int fileStatus(void);
+msString bridgeRequest(const char* method, const char* base, const char* route, const char* path, const uint8_t* body, int64_t len);
+int bridgeStatus(void);
 
 #endif

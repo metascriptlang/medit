@@ -3,9 +3,11 @@ import { runCanvas, CanvasOptions, canvasOptions } from "../../../neon/src/platf
 import { exit } from "std/process";
 import { Clip } from "../model/commands";
 import { Link } from "../lsp/session";
-import { App, Connect } from "./app";
+import { filePath } from "../lsp/uri";
+import { App, FileText, Platform } from "./app";
+import { EditorConfigFile } from "../model/editorconfig";
 import { SAMPLE } from "./sample";
-import { queryParam, requestFile } from "./lsp/socketWeb";
+import { queryParam, requestFile, requestFiles } from "./lsp/socketWeb";
 import { socketLink } from "./lsp/socketLink";
 
 const FONT_PATH = "assets/JetBrainsMonoNL-Regular.ttf";
@@ -21,56 +23,116 @@ const appClip: Clip = {
 	read: (done: (text: string) => void): void => { done(held); },
 };
 
-function store(text: string): string | null {
-	return `the web build has no file to save ${text.byteLength} bytes to`;
-}
-
 const SAMPLE_PATH = "sample.ms";
 const SAMPLE_URI = "file:///medic/sample.ms";
 
-interface Opened {
-	text: string;
-	path: string;
-	store: (text: string) => string | null;
-	connect: Connect | null;
+function linkTo(url: string): ((command: string) => Link | null) | null {
+	return url.byteLength == 0 ? null : (command: string): Link | null => socketLink(url);
 }
 
-function connectTo(url: string, uri: string, rootUri: string | null): Connect | null {
-	if (url.byteLength == 0) { return null; }
+function sampleHost(lsp: string): Platform {
 	return {
-		link: (command: string): Link | null => socketLink(url),
-		uri,
+		clip: appClip,
+		fail,
+		read: (key: string): FileText => key == SAMPLE_PATH ? { text: SAMPLE, uri: SAMPLE_URI, error: null }
+			: { text: "", uri: "", error: `the web build has no file ${key}: start the bridge with --root` },
+		store: (key: string, text: string): string | null => `the web build has no file to save ${text.byteLength} bytes to`,
+		files: (): string[] => [],
+		editorConfigs: (key: string): EditorConfigFile[] => [],
+		keyOf: (shown: string): string => shown,
+		keyOfUri: (uri: string): string | null => uri == SAMPLE_URI ? SAMPLE_PATH : null,
+		shown: (key: string): string => key,
+		link: linkTo(lsp),
+		rootUri: null,
+		processId: null,
+	};
+}
+
+interface Listing {
+	rootUri: string;
+	files: string[];
+}
+
+function listThrough(base: string): Listing | null {
+	const reply = requestFiles(base);
+	if (reply.status != 200) {
+		console.log(`medic: listing the project through the bridge: ${reply.status} ${reply.text}`);
+		return null;
+	}
+	const parsed = JSON.parseValue(reply.text);
+	if (!parsed.ok) {
+		console.log(`medic: the bridge sent the project's files as no JSON: ${parsed.error}`);
+		return null;
+	}
+	const listed = parsed.value.getDynamicField("files");
+	const files: string[] = [];
+	for (let i = 0; i < (listed.length() as int32); i++) { files.push(listed.at(i).asString()); }
+	return { rootUri: parsed.value.getDynamicField("rootUri").asString(), files };
+}
+
+function under(path: string, dir: string): string | null {
+	const at = dir.byteLength;
+	if (path.byteLength <= at || path.byteAt(at) != "/".code) { return null; }
+	if (path.byteSlice(0, 1).toLowerCase() != dir.byteSlice(0, 1).toLowerCase() || path.byteSlice(1, at) != dir.byteSlice(1, at)) { return null; }
+	return path.byteSlice(at + 1, path.byteLength);
+}
+
+function editorConfigsThrough(base: string, key: string): EditorConfigFile[] {
+	const found: EditorConfigFile[] = [];
+	let dir = "";
+	let at = 0;
+	while (at >= 0) {
+		const reply = requestFile("GET", base, dir == "" ? ".editorconfig" : `${dir}/.editorconfig`, "");
+		if (reply.status == 200) {
+			const parsed = JSON.parseValue(reply.text);
+			if (parsed.ok) { found.push({ dir, text: parsed.value.getDynamicField("text").asString() }); }
+		}
+		at = key.byteIndexOf("/", dir == "" ? 0 : dir.byteLength + 1);
+		if (at >= 0) { dir = key.byteSlice(0, at); }
+	}
+	return found;
+}
+
+function bridgeHost(lsp: string, base: string, rootUri: string): Platform {
+	const rootPath = filePath(rootUri) as string;
+	const dir = rootPath.endsWith("/") ? rootPath.byteSlice(0, rootPath.byteLength - 1) : rootPath;
+	return {
+		clip: appClip,
+		fail,
+		read: (key: string): FileText => {
+			const reply = requestFile("GET", base, key, "");
+			if (reply.status != 200) { return { text: "", uri: "", error: `opening ${key} through the bridge: ${reply.status} ${reply.text}` }; }
+			const parsed = JSON.parseValue(reply.text);
+			if (!parsed.ok) { return { text: "", uri: "", error: `the bridge sent ${key} as no JSON: ${parsed.error}` }; }
+			return { text: parsed.value.getDynamicField("text").asString(), uri: parsed.value.getDynamicField("uri").asString(), error: null };
+		},
+		store: (key: string, text: string): string | null => {
+			const reply = requestFile("PUT", base, key, text);
+			return reply.status == 204 ? null : `saving ${key} through the bridge: ${reply.status} ${reply.text}`;
+		},
+		files: (): string[] => {
+			const listing = listThrough(base);
+			return listing === null ? [] : (listing as Listing).files;
+		},
+		editorConfigs: (key: string): EditorConfigFile[] => editorConfigsThrough(base, key),
+		keyOf: (shown: string): string => shown,
+		keyOfUri: (uri: string): string | null => {
+			const path = filePath(uri);
+			return path === null ? null : under(path as string, dir);
+		},
+		shown: (key: string): string => key,
+		link: linkTo(lsp),
 		rootUri,
 		processId: null,
 	};
 }
 
-function storeThrough(base: string, path: string): (text: string) => string | null {
-	return (text: string): string | null => {
-		const reply = requestFile("PUT", base, path, text);
-		return reply.status == 204 ? null : `saving ${path} through the bridge: ${reply.status} ${reply.text}`;
-	};
-}
-
-function openThrough(lsp: string, path: string): Opened {
-	if (lsp.byteLength == 0) { fail(`?file=${path} needs ?lsp=, the bridge that serves it`); }
-	const base = `http${lsp.byteSlice(2, lsp.byteLength)}`;
-	const reply = requestFile("GET", base, path, "");
-	if (reply.status != 200) { fail(`opening ${path} through the bridge: ${reply.status} ${reply.text}`); }
-	const parsed = JSON.parseValue(reply.text);
-	if (!parsed.ok) { fail(`the bridge sent ${path} as no JSON: ${parsed.error}`); }
-	const file = parsed.value;
-	return {
-		text: file.getDynamicField("text").asString(),
-		path,
-		store: storeThrough(base, path),
-		connect: connectTo(lsp, file.getDynamicField("uri").asString(), file.getDynamicField("rootUri").asString()),
-	};
-}
-
 const lsp = queryParam("lsp");
 const file = queryParam("file");
-const opened: Opened = file.byteLength > 0 ? openThrough(lsp, file)
-	: { text: SAMPLE, path: SAMPLE_PATH, store, connect: connectTo(lsp, SAMPLE_URI, null) };
+const base = lsp.byteLength == 0 ? "" : `http${lsp.byteSlice(2, lsp.byteLength)}`;
+const listing = base.byteLength == 0 ? null : listThrough(base);
+if (file.byteLength > 0 && listing === null) { fail(`?file=${file} needs ?lsp=, a bridge started with --root`); }
+const platform: Platform = listing === null ? sampleHost(lsp) : bridgeHost(lsp, base, (listing as Listing).rootUri);
+const first: string | null = listing === null ? SAMPLE_PATH : file.byteLength > 0 ? file : null;
 const opts: CanvasOptions = { ...canvasOptions(960, 640), font: FONT_PATH };
-exit(runCanvas(opts, (): NeonNode => App(opened.text, opened.path, appClip, opened.store, fail, opened.connect)));
+exit(runCanvas(opts, (): NeonNode => App(platform, first)));

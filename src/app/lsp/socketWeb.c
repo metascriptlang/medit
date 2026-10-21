@@ -115,11 +115,11 @@ msString pageQuery(const char* name) {
 
 static int requestStatus;
 
-EM_JS(char*, medicJsRequest, (const char* method, const char* base, const char* path, const uint8_t* body, int len, int* status, int* length), {
+EM_JS(char*, medicJsRequest, (const char* method, const char* base, const char* route, const char* path, const uint8_t* body, int len, int* status, int* length), {
 	const xhr = new XMLHttpRequest();
 	let text;
 	try {
-		xhr.open(UTF8ToString(method), UTF8ToString(base) + "/file?path=" + encodeURIComponent(UTF8ToString(path)), false);
+		xhr.open(UTF8ToString(method), UTF8ToString(base) + UTF8ToString(route) + encodeURIComponent(UTF8ToString(path)), false);
 		xhr.send(body ? HEAPU8.slice(body, body + len) : null);
 		HEAP32[status >> 2] = xhr.status;
 		text = xhr.responseText;
@@ -134,14 +134,14 @@ EM_JS(char*, medicJsRequest, (const char* method, const char* base, const char* 
 	return out;
 });
 
-msString fileRequest(const char* method, const char* base, const char* path, const uint8_t* body, int64_t len) {
+msString bridgeRequest(const char* method, const char* base, const char* route, const char* path, const uint8_t* body, int64_t len) {
 	int length = 0;
-	char* text = medicJsRequest(method, base, path, body, (int)len, &requestStatus, &length);
+	char* text = medicJsRequest(method, base, route, path, body, (int)len, &requestStatus, &length);
 	msString out = msStringNew(text, (int64_t)length);
 	free(text);
 	return out;
 }
 
-int fileStatus(void) {
+int bridgeStatus(void) {
 	return requestStatus;
 }

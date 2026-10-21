@@ -8,8 +8,14 @@ extern function socketSend(data: Readonly<Span<uint8>>): int64;
 extern function socketState(): int32;
 extern function socketClose(): void;
 extern function pageQuery(name: cstring): string;
-extern function fileRequest(method: cstring, base: cstring, path: cstring, body: Readonly<Span<uint8>>): string;
-extern function fileStatus(): int32;
+extern function bridgeRequest(
+	method: cstring,
+	base: cstring,
+	route: cstring,
+	path: cstring,
+	body: Readonly<Span<uint8>>,
+): string;
+extern function bridgeStatus(): int32;
 
 const CLOSED: int32 = 2;
 
@@ -21,8 +27,13 @@ export interface Reply {
 }
 
 export function requestFile(method: string, base: string, path: string, body: string): Reply {
-	const text = fileRequest(method, base, path, body.asBytes());
-	return { status: fileStatus(), text };
+	const text = bridgeRequest(method, base, "/file?path=", path, body.asBytes());
+	return { status: bridgeStatus(), text };
+}
+
+export function requestFiles(base: string): Reply {
+	const text = bridgeRequest("GET", base, "/files", "", "".asBytes());
+	return { status: bridgeStatus(), text };
 }
 
 export function openSocket(url: string): boolean { return socketOpen(url) == 0; }

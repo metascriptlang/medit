@@ -7,11 +7,12 @@
 // The port defaults to 8766 and the command to `msc lsp`. It listens on 127.0.0.1 only, and
 // refuses a page served from another host, since a WebSocket is not held to the page's origin.
 // --trace prints the start of every chunk that passes, page to server as ">", back as "<".
-// --root starts the server in <dir> and lets the page read and save the files under it.
+// --root starts the server in <dir> and lets the page list (GET /files: git's tracked and
+// untracked files, else a walk), read and save (GET/PUT /file?path=) the files under it.
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
-import { readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -21,10 +22,12 @@ const options = dash >= 0 ? process.argv.slice(2, dash) : process.argv.slice(2);
 const trace = options.includes("--trace");
 const rootAt = options.indexOf("--root");
 const root = rootAt >= 0 ? realpathSync(resolve(options[rootAt + 1])) : null;
-const port = Number(options.find((o, i) => /^\d+$/.test(o) && i !== rootAt + 1) ?? 8766);
+const port = Number(options.find((o, i) => /^\d+$/.test(o) && (rootAt < 0 || i !== rootAt + 1)) ?? 8766);
 const command = dash >= 0 ? process.argv.slice(dash + 1) : ["msc", "lsp"];
 const TRACE_BYTES = 300;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const FILES_LIMIT = 200000;
+const SKIPPED = new Set([".git", "node_modules", "out", "target"]);
 
 function fromThisMachine(origin) {
 	if (origin === undefined) return true;
@@ -127,10 +130,46 @@ function answer(res, status, headers, body) {
 	res.end(body);
 }
 
-function serveFile(req, res, url) {
+function corsFor(req, res) {
 	const origin = req.headers.origin;
-	if (!fromThisMachine(origin)) return answer(res, 403, {}, `refused a page from ${origin}\n`);
-	const cors = origin === undefined ? {} : { "Access-Control-Allow-Origin": origin };
+	if (!fromThisMachine(origin)) {
+		answer(res, 403, {}, `refused a page from ${origin}\n`);
+		return null;
+	}
+	return origin === undefined ? {} : { "Access-Control-Allow-Origin": origin };
+}
+
+function walked(dir, prefix, files) {
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (files.length >= FILES_LIMIT) return files;
+		const path = prefix + entry.name;
+		if (!entry.isDirectory()) files.push(path);
+		else if (!SKIPPED.has(entry.name)) walked(resolve(dir, entry.name), `${path}/`, files);
+	}
+	return files;
+}
+
+function projectFiles() {
+	try {
+		const listed = execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"],
+			{ cwd: root, maxBuffer: 1 << 30, stdio: ["ignore", "pipe", "ignore"] });
+		return listed.toString("utf8").split("\0").filter((p) => p.length > 0).slice(0, FILES_LIMIT);
+	} catch {
+		return walked(root, "", []).sort();
+	}
+}
+
+function serveList(req, res) {
+	const cors = corsFor(req, res);
+	if (cors === null) return;
+	if (root === null) return answer(res, 404, cors, "the bridge lists no files: start it with --root <dir>\n");
+	if (req.method !== "GET") return answer(res, 405, cors, `no ${req.method} on the file list\n`);
+	answer(res, 200, { ...cors, "Content-Type": "application/json; charset=utf-8" }, JSON.stringify({ rootUri: pathToFileURL(root).href, files: projectFiles() }));
+}
+
+function serveFile(req, res, url) {
+	const cors = corsFor(req, res);
+	if (cors === null) return;
 	if (req.method === "OPTIONS") {
 		return answer(res, 204, { ...cors, "Access-Control-Allow-Methods": "GET, PUT", "Access-Control-Allow-Headers": "Content-Type" }, "");
 	}
@@ -159,6 +198,7 @@ function serveFile(req, res, url) {
 const server = createServer((req, res) => {
 	const url = new URL(req.url, "http://127.0.0.1");
 	if (url.pathname === "/file") return serveFile(req, res, url);
+	if (url.pathname === "/files") return serveList(req, res);
 	answer(res, 426, {}, "medic lsp bridge: connect with a WebSocket\n");
 });
 server.on("upgrade", (req, socket) => {
