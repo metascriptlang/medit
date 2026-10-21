@@ -1,8 +1,10 @@
+import { onSettled } from "../../../../../../neon/src/core/effect";
+import { Cleanup } from "../../../../../../neon/src/core/types";
 import { NeonNode } from "../../../../../../neon/src/render/node";
 import { NeonEvent } from "../../../../../../neon/src/render/event";
 import { createStyles, styleOf } from "../../../../../../neon/src/macros/ui/style";
 import { Show } from "../../../../../../neon/src/macros/ui/flow";
-import { Text, View } from "../../../../../../neon/src/components/primitives";
+import { Text, TextInputHandle, View } from "../../../../../../neon/src/components/primitives";
 import { TextSpan } from "../../../../../../neon/src/render/hostTypes";
 import { FOREGROUND, MUTED, PADDING, PANEL } from "../../../theme";
 import { Field } from "../../ui/field";
@@ -87,7 +89,7 @@ export function FindBar(props: {
 			<Field
 				value={finder.query()}
 				placeholder="Find"
-				ref={finder.attach}
+				ref={(input: TextInputHandle): void => { onSettled((): Cleanup | null => { finder.attach(input); return null; }); }}
 				onChangeText={(text: string): void => {
 					finder.search(text);
 					props.moved();

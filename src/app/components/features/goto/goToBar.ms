@@ -1,3 +1,5 @@
+import { onSettled } from "../../../../../../neon/src/core/effect";
+import { Cleanup } from "../../../../../../neon/src/core/types";
 import { NeonNode } from "../../../../../../neon/src/render/node";
 import { NeonEvent } from "../../../../../../neon/src/render/event";
 import { Accessor } from "../../../../../../neon/src/core/signal";
@@ -38,7 +40,7 @@ export function GoToBar(props: {
 			<Field
 				value={props.query()}
 				placeholder="line:character"
-				ref={props.attach}
+				ref={(input: TextInputHandle): void => { onSettled((): Cleanup | null => { props.attach(input); return null; }); }}
 				onChangeText={props.changed}
 				onKeyDown={key}
 			/>
