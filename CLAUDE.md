@@ -47,6 +47,12 @@ usual.
   (`~/metascript/.inbox/compiler/2026-10-20-tree-sitter-grammar-behind-the-language.md`), and those
   make the reparse slow; once it parses them, the limit can rise to about 2 MB. Larger files need
   parsing off the UI thread.
+- `src/lsp` speaks the language server protocol over a `Link` (bytes in and out), so the headless
+  session runs the same over a desktop child process (`src/app/lsp/processLink.ms`) and a page's
+  WebSocket (`socketLink.ms`). `src/model/language.ms` names the server of each file type.
+  A server's positions name the document version they were computed on; `DocumentSync` keeps the last
+  `KEPT_VERSIONS` texts sent and maps through the edits since, and drops a reply whose version
+  it no longer holds.
 
 ## Build and run
 
@@ -66,6 +72,10 @@ Run from the repository root: fonts are loaded by relative path.
   keystroke's reparse at three places and the tones of 40 lines.
 - Web (`runCanvas`, `--os=emcc`): `sh scripts/buildWeb.sh [gl] [wgpu]` writes `out/web/`; serve
   that directory and open `index.html` (`?gl` / `?wgpu` force a backend).
+- Language server in the web build: `node scripts/lspBridge.mjs [port] [--trace] [-- command]`
+  carries a server's stdio over a WebSocket (default port 8766, `msc lsp`); open
+  `index.html?lsp=ws://127.0.0.1:8766`. The page's sample is `file:///medic/sample.ms`, which the
+  server sees only through the protocol.
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
   header). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
 - Drive the desktop build: `pwsh scripts/desktopDrive.ps1 out/medic.exe <file> <outDir> <step>...`
