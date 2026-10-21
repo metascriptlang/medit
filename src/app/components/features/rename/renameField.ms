@@ -1,6 +1,8 @@
 import { NeonNode } from "../../../../../../neon/src/render/node";
 import { NeonEvent } from "../../../../../../neon/src/render/event";
 import { Accessor } from "../../../../../../neon/src/core/signal";
+import { onSettled } from "../../../../../../neon/src/core/effect";
+import { Cleanup } from "../../../../../../neon/src/core/types";
 import { Show } from "../../../../../../neon/src/macros/ui/flow";
 import { createStyles, styleOf } from "../../../../../../neon/src/macros/ui/style";
 import { TextInput, TextInputHandle, TextSelection, View } from "../../../../../../neon/src/components/primitives";
@@ -39,7 +41,7 @@ export function RenameField(props: {
 				style={styles.field}
 				value={props.name()}
 				selection={props.selection()}
-				ref={(input: TextInputHandle): void => { input.focus(); }}
+				ref={(input: TextInputHandle): void => { onSettled((): Cleanup | null => { input.focus(); return null; }); }}
 				onChangeText={props.changed}
 				onKeyDown={key}
 			/>
