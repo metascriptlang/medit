@@ -4,7 +4,8 @@
 //
 //   node scripts/lspBridge.mjs [port] [--trace] [-- command args...]
 //
-// The port defaults to 8766 and the command to `msc lsp`. It listens on 127.0.0.1 only.
+// The port defaults to 8766 and the command to `msc lsp`. It listens on 127.0.0.1 only, and
+// refuses a page served from another host, since a WebSocket is not held to the page's origin.
 // --trace prints the start of every chunk that passes, page to server as ">", back as "<".
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
@@ -17,6 +18,12 @@ const trace = options.includes("--trace");
 const port = Number(options.find((o) => /^\d+$/.test(o)) ?? 8766);
 const command = dash >= 0 ? process.argv.slice(dash + 1) : ["msc", "lsp"];
 const TRACE_BYTES = 300;
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+function fromThisMachine(origin) {
+	if (origin === undefined) return true;
+	try { return LOOPBACK.has(new URL(origin).hostname); } catch { return false; }
+}
 
 function traced(way, chunk) {
 	if (trace) console.log(`${way} ${chunk.subarray(0, TRACE_BYTES).toString().replace(/\r\n/g, " ")}`);
@@ -106,6 +113,10 @@ const server = createServer((req, res) => {
 server.on("upgrade", (req, socket) => {
 	const key = req.headers["sec-websocket-key"];
 	if (!key) return socket.destroy();
+	if (!fromThisMachine(req.headers.origin)) {
+		console.log(`bridge: refused a page from ${req.headers.origin}`);
+		return socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+	}
 	const accept = createHash("sha1").update(key + GUID).digest("base64");
 	socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
 		+ `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
