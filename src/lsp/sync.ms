@@ -253,12 +253,10 @@ when (testBuild) {
 	}
 
 	test "a position from an older version reads that version's text, and a forgotten one is dropped" {
-		const d = new Document("ab
-cd");
+		const d = new Document("ab\ncd");
 		const sync = new DocumentSync("file:///a.ms", "metascript", d);
 		const _o = sync.opened(d);
-		const _a = d.splice({ from: 0, to: 0, text: "zz
-" });
+		const _a = d.splice({ from: 0, to: 0, text: "zz\n" });
 		const _p = sync.changed(d, SyncKind.Incremental);
 		const _b = d.splice({ from: 0, to: 0, text: "y" });
 		assert sync.offsetAt(d, 0, { line: 1, character: 1 }, Bias.Right) == 8;
