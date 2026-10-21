@@ -1,8 +1,9 @@
-import { Document } from "../model/document";
+import { Bias, Document } from "../model/document";
 import { cellsBetween, offsetAtCell, prevCluster } from "../model/motion";
-import { clusterCellsIn, nextClusterIn } from "../text/clusters";
+import { cellsIn, clusterCellsIn, nextClusterIn } from "../text/clusters";
 import { Tone } from "./tone";
 import { Severity } from "../model/diagnostics";
+import { Inlay } from "../model/inlays";
 
 const TAB: int32 = 9;
 const SPACE: int32 = 32;
@@ -13,6 +14,7 @@ export struct Piece {
 	tone: Tone;
 	faded: boolean;
 	underline: Severity | null;
+	hint: boolean;
 }
 
 export struct Mark {
@@ -30,7 +32,27 @@ export struct VisualRow {
 	last: boolean;
 }
 
-export function rowsOf(doc: Document, line: int32, width: int32): Vec<VisualRow> {
+export struct ShownCell {
+	text: int32;
+	hintAt: int32;
+}
+
+function inlayCells(i: Inlay): int32 {
+	const bytes = i.text.asBytes();
+	return cellsIn(bytes, 0, bytes.length as int32, 0);
+}
+
+function firstInlay(inlays: Inlay[], from: int32): int32 {
+	let k = 0;
+	while (k < (inlays.length as int32) && inlays[k].at < from) { k++; }
+	return k;
+}
+
+function shows(this r: VisualRow, i: Inlay): boolean {
+	return i.at >= r.from && (i.at < r.to || (r.last && i.at == r.to));
+}
+
+export function rowsOf(doc: Document, line: int32, width: int32, inlays: Inlay[] = []): Vec<VisualRow> {
 	const start = doc.lineStart(line);
 	let rows: Vec<VisualRow> = [];
 	if (width <= 0) {
@@ -40,29 +62,44 @@ export function rowsOf(doc: Document, line: int32, width: int32): Vec<VisualRow>
 	const text = doc.line(line);
 	const bytes = text.asBytes();
 	const end = bytes.length as int32;
+	const count = inlays.length as int32;
+	let k = firstInlay(inlays, start);
 	let from = 0;
 	let rowCell = 0;
+	let rowShown = 0;
 	let at = 0;
 	let cell = 0;
+	let shown = 0;
 	let breakAt = -1;
 	let breakCell = 0;
+	let breakShown = 0;
 	while (at < end) {
+		let hinted = 0;
+		let past = k;
+		while (past < count && inlays[past].at <= start + at) {
+			hinted += inlayCells(inlays[past]);
+			past++;
+		}
 		const cells = clusterCellsIn(bytes, at, cell);
-		if (cell + cells - rowCell > width && at > from) {
+		if (shown + hinted + cells - rowShown > width && at > from) {
 			const soft = breakAt > from;
 			const cut = soft ? breakAt : at;
 			rows.push({ line, from: start + from, to: start + cut, cell: rowCell, last: false });
 			from = cut;
 			rowCell = soft ? breakCell : cell;
+			rowShown = soft ? breakShown : shown;
 			breakAt = -1;
 			continue;
 		}
+		k = past;
 		const lead = bytes[at] as int32;
 		cell += cells;
+		shown += hinted + cells;
 		at = nextClusterIn(bytes, at);
 		if (lead == SPACE || lead == TAB) {
 			breakAt = at;
 			breakCell = cell;
+			breakShown = shown;
 		}
 	}
 	rows.push({ line, from: start + from, to: start + end, cell: rowCell, last: true });
@@ -80,12 +117,41 @@ export function holds(this r: VisualRow, offset: int32): boolean {
 	return offset >= r.from && (offset < r.to || (r.last && offset == r.to));
 }
 
-export function cellIn(doc: Document, r: VisualRow, offset: int32): int32 {
-	return cellsBetween(doc, r.from, offset, r.cell);
+export function cellIn(doc: Document, r: VisualRow, offset: int32, inlays: Inlay[] = []): int32 {
+	let hinted = 0;
+	for (let k = firstInlay(inlays, r.from); k < (inlays.length as int32) && inlays[k].at <= offset; k++) {
+		const i = inlays[k];
+		if (r.shows(i) && (i.at < offset || i.bias == Bias.Left)) { hinted += inlayCells(i); }
+	}
+	return cellsBetween(doc, r.from, offset, r.cell) + hinted;
 }
 
-export function offsetIn(doc: Document, r: VisualRow, cell: int32): int32 {
-	const at = offsetAtCell(doc, r.from, r.to, r.cell, cell);
+export function rowCells(doc: Document, r: VisualRow, inlays: Inlay[] = []): int32 {
+	let hinted = 0;
+	for (let k = firstInlay(inlays, r.from); k < (inlays.length as int32) && inlays[k].at <= r.to; k++) {
+		if (r.shows(inlays[k])) { hinted += inlayCells(inlays[k]); }
+	}
+	return cellsBetween(doc, r.from, r.to, r.cell) + hinted;
+}
+
+export function shownCellIn(doc: Document, r: VisualRow, cell: int32, inlays: Inlay[] = []): ShownCell {
+	let hinted = 0;
+	for (let k = firstInlay(inlays, r.from); k < (inlays.length as int32) && inlays[k].at <= r.to; k++) {
+		const i = inlays[k];
+		if (!r.shows(i)) { continue; }
+		const left = cellsBetween(doc, r.from, i.at, r.cell) + hinted;
+		const width = inlayCells(i);
+		if (cell < left) { break; }
+		if (cell < left + width) { return { text: cell - hinted, hintAt: i.at }; }
+		hinted += width;
+	}
+	return { text: cell - hinted, hintAt: -1 };
+}
+
+export function offsetIn(doc: Document, r: VisualRow, cell: int32, inlays: Inlay[] = []): int32 {
+	const shown = shownCellIn(doc, r, cell, inlays);
+	if (shown.hintAt >= 0) { return shown.hintAt; }
+	const at = offsetAtCell(doc, r.from, r.to, r.cell, shown.text);
 	return !r.last && at == r.to ? prevCluster(doc, r.to) : at;
 }
 
@@ -125,6 +191,7 @@ export function rowPieces(
 	tones: Readonly<Span<Tone>>,
 	base: int32,
 	marks: Mark[],
+	inlays: Inlay[] = [],
 ): Vec<Piece> {
 	let pieces: Vec<Piece> = [];
 	let out: uint8[] = [];
@@ -136,26 +203,45 @@ export function rowPieces(
 	const end = bytes.length as int32;
 	const first = r.cell + left;
 	const limit = first + cols;
+	const count = inlays.length as int32;
+	let h = firstInlay(inlays, r.from);
 	let at = 0;
 	let cell = r.cell;
-	while (at < end && cell < limit) {
+	let shift = 0;
+	while (at <= end && cell + shift < limit) {
+		while (h < count && inlays[h].at <= r.from + at && (at < end || r.last)) {
+			const width = inlayCells(inlays[h]);
+			const x = cell + shift;
+			if (x + width > first && x < limit) {
+				if (out.length > 0) {
+					pieces.push({ text: out.asString(), tone, faded, underline, hint: false });
+					out = [];
+				}
+				const shown = inlayText(inlays[h].text, Math.max(0, first - x), Math.min(x + width, limit) - Math.max(x, first));
+				pieces.push({ text: shown, tone: Tone.Plain, faded: false, underline: null, hint: true });
+			}
+			shift += width;
+			h++;
+		}
+		if (at == end || cell + shift >= limit) { break; }
+		const x = cell + shift;
 		const cells = clusterCellsIn(bytes, at, cell);
 		const next = nextClusterIn(bytes, at);
-		if (cell + cells > first) {
+		if (x + cells > first) {
 			const here = toneAt(tones, r.from + at - base);
 			const mark = marks.length == 0 ? null : markAt(marks, r.from + at);
 			const dim = mark !== null && (mark as Mark).faded;
 			const line = mark === null ? null : (mark as Mark).underline;
 			if ((here != tone || dim != faded || line != underline) && out.length > 0) {
-				pieces.push({ text: out.asString(), tone, faded, underline });
+				pieces.push({ text: out.asString(), tone, faded, underline, hint: false });
 				out = [];
 			}
 			tone = here;
 			faded = dim;
 			underline = line;
 			const lead = bytes[at] as int32;
-			if (lead == TAB || cell < first || cell + cells > limit) {
-				out.pushSpaces(Math.min(cell + cells, limit) - Math.max(cell, first));
+			if (lead == TAB || x < first || x + cells > limit) {
+				out.pushSpaces(Math.min(x + cells, limit) - Math.max(x, first));
 			} else if (lead < SPACE || lead == DELETE) {
 				out.pushControlPicture(lead);
 			} else {
@@ -166,8 +252,28 @@ export function rowPieces(
 		cell += cells;
 		at = next;
 	}
-	if (out.length > 0 || pieces.length == 0) { pieces.push({ text: out.asString(), tone, faded, underline }); }
+	if (out.length > 0 || pieces.length == 0) { pieces.push({ text: out.asString(), tone, faded, underline, hint: false }); }
 	return pieces;
+}
+
+function inlayText(text: string, skip: int32, count: int32): string {
+	const bytes = text.asBytes();
+	const end = bytes.length as int32;
+	let out: uint8[] = [];
+	let at = 0;
+	let cell = 0;
+	while (at < end && cell < skip + count) {
+		const cells = clusterCellsIn(bytes, at, cell);
+		const next = nextClusterIn(bytes, at);
+		if (cell >= skip && cell + cells <= skip + count) {
+			for (let k = at; k < next; k++) { out.push(bytes[k]); }
+		} else if (cell + cells > skip) {
+			out.pushSpaces(Math.min(cell + cells, skip + count) - Math.max(cell, skip));
+		}
+		cell += cells;
+		at = next;
+	}
+	return out.asString();
 }
 
 export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): string {
@@ -250,4 +356,45 @@ test "row text expands tabs, pads wide clusters and shows control characters" {
 	const lone = new Document("a\rb\r\n");
 	assert lone.lineCount() == 2;
 	assert rowText(lone, rowsOf(lone, 0, 0)[0], 0, 5) == "a␍b";
+}
+
+function hint(at: int32, text: string, bias: Bias): Inlay {
+	return { at, text, bias };
+}
+
+test "a hint's cells count toward the row they wrap, and a hint at a break starts the next row" {
+	const d = new Document("ab cd ef");
+	assert texts(d, rowsOf(d, 0, 6)) == "ab cd |ef";
+	assert texts(d, rowsOf(d, 0, 6, [hint(2, "::", Bias.Right)])) == "ab |cd ef";
+	const rows = rowsOf(d, 0, 6, [hint(6, "1234", Bias.Right)]);
+	assert texts(d, rows) == "ab cd |ef";
+	assert rowCells(d, rows[0], [hint(6, "1234", Bias.Right)]) == 6;
+	assert cellIn(d, rows[1], 7, [hint(6, "1234", Bias.Right)]) == 5;
+}
+
+test "the caret sits after a parameter hint and before a type hint, and a click on a hint lands at its place" {
+	const d = new Document("f(1, 2)");
+	const hints = [hint(2, "a: ", Bias.Left), hint(5, "b: ", Bias.Left), hint(7, ": T", Bias.Right)];
+	const r = rowsOf(d, 0, 0)[0];
+	assert cellIn(d, r, 2, hints) == 5 && cellIn(d, r, 5, hints) == 11 && cellIn(d, r, 7, hints) == 13;
+	assert cellIn(d, r, 2) == 2 && rowCells(d, r, hints) == 16;
+	assert offsetIn(d, r, 3, hints) == 2 && offsetIn(d, r, 5, hints) == 2 && offsetIn(d, r, 6, hints) == 3;
+	assert offsetIn(d, r, 14, hints) == 7 && offsetIn(d, r, 30, hints) == 7;
+	assert shownCellIn(d, r, 3, hints).hintAt == 2 && shownCellIn(d, r, 6, hints).text == 3 && shownCellIn(d, r, 6, hints).hintAt == -1;
+}
+
+test "hints draw as their own pieces, clipped to the columns shown" {
+	const d = new Document("f(1, 2)");
+	const hints = [hint(2, "a: ", Bias.Left), hint(5, "b: ", Bias.Left), hint(7, ": T", Bias.Right)];
+	const r = rowsOf(d, 0, 0)[0];
+	const all = rowPieces(d, r, 0, 20, [], 0, [], hints);
+	let text = "";
+	let hinted = "";
+	for (const p of all) {
+		text += p.text;
+		if (p.hint) { hinted += `[${p.text}]`; }
+	}
+	assert text == "f(a: 1, b: 2): T" && hinted == "[a: ][b: ][: T]" && all.length == 6;
+	const clipped = rowPieces(d, r, 3, 5, [], 0, [], hints);
+	assert clipped.length == 2 && clipped[0].text == ": " && clipped[0].hint && clipped[1].text == "1, " && !clipped[1].hint;
 }
