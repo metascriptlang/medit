@@ -7,15 +7,18 @@ import {
 	offsetAtColumn,
 	prevCluster,
 	smartHome,
+	subwordLeft,
+	subwordRight,
 	wordAt,
 	wordLeft,
 	wordRight,
 } from "./motion";
 import { Sel, Selections, cursorAt, primaryRange, sameSelections, single, span } from "./selection";
-import { Query, nextMatch, selectAllMatches } from "./find";
+import { Query, nextMatch, prevMatch, selectAllMatches } from "./find";
 import { pairAround, typeText } from "./pairs";
 import { BracketPair, enclosingBrackets } from "./brackets";
 import { MenuMove } from "./completer";
+import { Expander } from "./expand";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
@@ -53,8 +56,11 @@ export interface Context {
 	confirmList: () => void;
 	hideList: () => void;
 	codeActions: () => void;
+	toggleInlayHints: () => void;
 	outline: () => void;
 	navigate: (back: boolean) => void;
+	expander: Expander;
+	scrollRows: (rows: int32) => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -395,7 +401,7 @@ function addCursor(e: Editor, rows: int32): void {
 	addPrimary(e, { anchor: head, head, goal });
 }
 
-function selectNextOccurrence(e: Editor, cx: Context): void {
+function selectOccurrence(e: Editor, backwards: boolean, replace: boolean): void {
 	const ranges = e.selections.ranges;
 	const primary = e.selections.primaryRange();
 	if (primary.isEmpty()) {
@@ -413,9 +419,12 @@ function selectNextOccurrence(e: Editor, cx: Context): void {
 		caseSensitive: e.caseSensitive,
 		wholeWord: wordwise,
 	};
-	const at = nextMatch(e.doc, q, ranges[ranges.length - 1].end());
+	const at = backwards ? prevMatch(e.doc, q, ranges[0].start()) :
+		nextMatch(e.doc, q, ranges[ranges.length - 1].end());
 	if (ranges.some((s: Sel): boolean => s.start() == at)) { return; }
-	addPrimary(e, span(at, at + q.text.byteLength));
+	const found = span(at, at + q.text.byteLength);
+	if (replace) { replacePrimary(e, found); }
+	else { addPrimary(e, found); }
 	if (wordwise) { e.wordwiseNext = e.selections; }
 }
 
@@ -659,6 +668,65 @@ function toEnclosingBracket(e: Editor, cx: Context): void {
 	});
 }
 
+function joinedRows(e: Editor): LineGroup[] {
+	const groups: LineGroup[] = [];
+	for (const s of e.selections.ranges) {
+		const [first, last] = linesOf(e.doc, s);
+		const until = Math.max(first, last - 1);
+		const k = groups.length - 1;
+		if (k >= 0 && first <= groups[k].last + 1) {
+			groups[k] = {
+				first: groups[k].first,
+				last: Math.max(until, groups[k].last),
+				members: groups[k].members + 1,
+			};
+		} else {
+			groups.push({ first, last: until, members: 1 });
+		}
+	}
+	return groups;
+}
+
+function joinEdit(doc: Document, line: int32, marker: string | null): Edit {
+	const below = line + 1;
+	let to = indentEnd(doc, below);
+	if (marker !== null && !commentRange(doc, line, marker as string).isEmpty()) {
+		to = commentRange(doc, below, marker as string).end();
+	}
+	return { from: doc.lineEnd(line), to, text: to < doc.lineEnd(below) ? " " : "" };
+}
+
+function joinLines(e: Editor, cx: Context): void {
+	const doc = e.doc;
+	const edits: Edit[] = [];
+	const carets: int32[] = [];
+	let primary = 0;
+	let i = 0;
+	for (const g of joinedRows(e)) {
+		carets.push(doc.lineEnd(g.last));
+		if (e.selections.primary >= i) { primary = carets.length - 1; }
+		i += g.members;
+		for (let line = g.first; line <= g.last && line + 1 < doc.lineCount(); line++) {
+			edits.push(joinEdit(doc, line, e.lineComment));
+		}
+	}
+	e.begin();
+	const applied = e.change(edits);
+	const next: Sel[] = [];
+	for (const at of carets) { next.push(cursorAt(mapThrough(at, applied, Bias.Left))); }
+	e.select({ ranges: next, primary });
+	e.end();
+}
+
+function cancel(e: Editor, cx: Context): void {
+	if (e.selections.ranges.length > 1) {
+		e.select({ ranges: [e.oldestRange()], primary: 0 });
+		return;
+	}
+	const s = e.selections.primaryRange();
+	if (!s.isEmpty()) { e.select(single(s.head)); }
+}
+
 export function commands(): Map<string, Command> {
 	const table = new Map<string, Command>();
 	const addMotion = (name: string, selectName: string, motion: Motion): void => {
@@ -677,18 +745,31 @@ export function commands(): Map<string, Command> {
 	addMotion("end", "selectEnd", toRowEnd);
 	addMotion("docStart", "selectDocStart", jump(docStart));
 	addMotion("docEnd", "selectDocEnd", jump(docEnd));
+	addMotion("subwordLeft", "selectSubwordLeft", jump(subwordLeft));
+	addMotion("subwordRight", "selectSubwordRight", jump(subwordRight));
 	table.set("selectAll", (e: Editor, cx: Context): void => {
 		e.select({ ranges: [span(0, e.doc.length())], primary: 0 });
 	});
 	table.set("selectLine", selectLine);
-	table.set("selectNextOccurrence", selectNextOccurrence);
+	const occurrence = (backwards: boolean, replace: boolean): Command =>
+		(e: Editor, cx: Context): void => { selectOccurrence(e, backwards, replace); };
+	table.set("selectNextOccurrence", occurrence(false, false));
+	table.set("selectPreviousOccurrence", occurrence(true, false));
+	table.set("skipToNextOccurrence", occurrence(false, true));
 	table.set("selectAllOccurrences", selectAllOccurrences);
 	table.set("moveToEnclosingBracket", toEnclosingBracket);
 	table.set("addCursorAbove", (e: Editor, cx: Context): void => { addCursor(e, -1); });
 	table.set("addCursorBelow", (e: Editor, cx: Context): void => { addCursor(e, 1); });
-	table.set("collapse", (e: Editor, cx: Context): void => {
-		e.select(single(e.selections.primaryRange().head));
-	});
+	table.set("collapse", cancel);
+	table.set("undoSelection", (e: Editor, cx: Context): void => { e.undoSelection(); });
+	table.set("redoSelection", (e: Editor, cx: Context): void => { e.redoSelection(); });
+	const scroll = (lines: int32, pages: int32): Command => (e: Editor, cx: Context): void => {
+		cx.scrollRows(lines + pages * cx.pageRows());
+	};
+	table.set("scrollLineUp", scroll(-1, 0));
+	table.set("scrollLineDown", scroll(1, 0));
+	table.set("scrollPageUp", scroll(0, -1));
+	table.set("scrollPageDown", scroll(0, 1));
 	table.set("newline", newline);
 	table.set("newlineBelow", (e: Editor, cx: Context): void => { openLine(e, true); });
 	table.set("newlineAbove", (e: Editor, cx: Context): void => { openLine(e, false); });
@@ -697,9 +778,11 @@ export function commands(): Map<string, Command> {
 	table.set("duplicateLineUp", (e: Editor, cx: Context): void => { duplicateLines(e, true); });
 	table.set("duplicateLineDown", (e: Editor, cx: Context): void => { duplicateLines(e, false); });
 	table.set("deleteLine", deleteLines);
+	table.set("joinLines", joinLines);
 	table.set("toggleComments", toggleComments);
 	table.set("tab", tab);
 	table.set("outdent", outdent);
+	table.set("indent", (e: Editor, cx: Context): void => { indent(e); });
 	table.set("backspace", (e: Editor, cx: Context): void => {
 		deleteEach(e, "delete", (doc: Document, at: int32): Sel => {
 			const pair = pairAround(e, at);
@@ -709,6 +792,8 @@ export function commands(): Map<string, Command> {
 	table.set("delete", deleteToward("delete", nextCluster));
 	table.set("deleteWordLeft", deleteToward("", wordLeft));
 	table.set("deleteWordRight", deleteToward("", wordRight));
+	table.set("deleteSubwordLeft", deleteToward("", subwordLeft));
+	table.set("deleteSubwordRight", deleteToward("", subwordRight));
 	table.set("undo", (e: Editor, cx: Context): void => { e.undo(); });
 	table.set("redo", (e: Editor, cx: Context): void => { e.redo(); });
 	table.set("copy", copy);
@@ -749,9 +834,12 @@ export function commands(): Map<string, Command> {
 	table.set("confirmList", (e: Editor, cx: Context): void => { cx.confirmList(); });
 	table.set("hideList", (e: Editor, cx: Context): void => { cx.hideList(); });
 	table.set("codeActions", (e: Editor, cx: Context): void => { cx.codeActions(); });
+	table.set("toggleInlayHints", (e: Editor, cx: Context): void => { cx.toggleInlayHints(); });
 	table.set("outline", (e: Editor, cx: Context): void => { cx.outline(); });
 	table.set("goBack", (e: Editor, cx: Context): void => { cx.navigate(true); });
 	table.set("goForward", (e: Editor, cx: Context): void => { cx.navigate(false); });
+	table.set("expandSelection", (e: Editor, cx: Context): void => { cx.expander.grow(e); });
+	table.set("shrinkSelection", (e: Editor, cx: Context): void => { cx.expander.shrink(e); });
 	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -825,7 +913,11 @@ function heads(e: Editor): string {
 	return parts.join(",");
 }
 
-function runner(saved: string[] = [], refusal: string | null = null): (e: Editor, name: string) => void {
+function runner(
+	saved: string[] = [],
+	refusal: string | null = null,
+	scrolled: int32[] = [],
+): (e: Editor, name: string) => void {
 	const table = commands();
 	let clipboard = "";
 	let wrap = 0;
@@ -861,8 +953,11 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		confirmList: (): void => {},
 		hideList: (): void => {},
 		codeActions: (): void => {},
+		toggleInlayHints: (): void => {},
 		outline: (): void => {},
 		navigate: (back: boolean): void => {},
+		expander: new Expander(null),
+		scrollRows: (rows: int32): void => { scrolled.push(rows); },
 	};
 	return (e: Editor, name: string): void => {
 		const command = table.get(name);
@@ -1413,4 +1508,178 @@ test "backspace between an inserted pair deletes both" {
 	const kept = editorAt("()", [1]);
 	run(kept, "backspace");
 	assert kept.doc.text() == ")";
+}
+
+test "indent shifts the line under each cursor once and outdent takes it back" {
+	const run = runner();
+	const e = editorAt("a\nb\nc", [1, 3]);
+	run(e, "indent");
+	assert e.doc.text() == "\ta\n\tb\nc";
+	assert heads(e) == "2,5";
+	run(e, "outdent");
+	assert e.doc.text() == "a\nb\nc";
+	assert heads(e) == "1,3";
+}
+
+test "joining lines drops the next line's indent for one space and leaves the caret at the seam" {
+	const run = runner();
+	const e = editorAt("let a =\n    1 +\n\t2;", [2]);
+	run(e, "joinLines");
+	assert e.doc.text() == "let a = 1 +\n\t2;";
+	assert heads(e) == "7";
+	run(e, "joinLines");
+	assert e.doc.text() == "let a = 1 + 2;";
+	assert heads(e) == "11";
+	run(e, "undo");
+	assert e.doc.text() == "let a = 1 +\n\t2;";
+	const blank = editorAt("a\n  \nb", [0]);
+	run(blank, "joinLines");
+	assert blank.doc.text() == "a\nb";
+	assert heads(blank) == "1";
+	const last = editorAt("ab", [0]);
+	run(last, "joinLines");
+	assert last.doc.text() == "ab";
+	assert heads(last) == "2";
+}
+
+test "joining a selection joins its lines, short of a line it only touches" {
+	const run = runner();
+	const e = editorAt("a\nb\nc\nd", [0]);
+	e.select({ ranges: [span(0, 5)], primary: 0 });
+	run(e, "joinLines");
+	assert e.doc.text() == "a b c\nd";
+	assert heads(e) == "3";
+	const touching = editorAt("a\nb\nc", [0]);
+	touching.select({ ranges: [span(0, 4)], primary: 0 });
+	run(touching, "joinLines");
+	assert touching.doc.text() == "a b\nc";
+}
+
+test "cursors join their own lines in one step, and cursors on neighbouring lines join as one" {
+	const run = runner();
+	const e = editorAt("a\nb\nc\nd", [0, 4]);
+	run(e, "joinLines");
+	assert e.doc.text() == "a b\nc d";
+	assert heads(e) == "1,5";
+	run(e, "undo");
+	assert e.doc.text() == "a\nb\nc\nd";
+	const near = editorAt("a\nb\nc", [0, 2]);
+	run(near, "joinLines");
+	assert near.doc.text() == "a b c";
+	assert heads(near) == "3";
+}
+
+test "joining a comment line takes the next line's marker, other lines keep theirs" {
+	const run = runner();
+	const e = editorAt("// one\n  // two\nx", [0]);
+	e.lineComment = "// ";
+	run(e, "joinLines");
+	assert e.doc.text() == "// one two\nx";
+	const code = editorAt("x();\n// note", [0]);
+	code.lineComment = "// ";
+	run(code, "joinLines");
+	assert code.doc.text() == "x(); // note";
+}
+
+test "escape keeps the oldest of several selections with its range, then collapses it" {
+	const run = runner();
+	const e = editorAt("foo foo foo", [1]);
+	run(e, "selectNextOccurrence");
+	run(e, "selectNextOccurrence");
+	run(e, "selectNextOccurrence");
+	assert heads(e) == "0-3,4-7,8-11";
+	run(e, "collapse");
+	assert heads(e) == "0-3";
+	run(e, "collapse");
+	assert heads(e) == "3";
+	run(e, "collapse");
+	assert heads(e) == "3";
+	const above = editorAt("abc\nabc", [6]);
+	run(above, "addCursorAbove");
+	assert heads(above) == "2,6";
+	run(above, "collapse");
+	assert heads(above) == "6";
+}
+
+test "previous occurrence adds matches backwards and stops once they are all selected" {
+	const run = runner();
+	const e = editorAt("foo bar foo foo", [13]);
+	run(e, "selectPreviousOccurrence");
+	assert heads(e) == "12-15";
+	run(e, "selectPreviousOccurrence");
+	assert heads(e) == "8-11,12-15";
+	run(e, "selectPreviousOccurrence");
+	assert heads(e) == "0-3,8-11,12-15";
+	assert e.selections.primary == 0;
+	run(e, "selectPreviousOccurrence");
+	assert heads(e) == "0-3,8-11,12-15";
+}
+
+test "skipping moves the newest selection on to the next occurrence, wrapping, words from a caret" {
+	const run = runner();
+	const e = editorAt("foo food foo", [1]);
+	run(e, "skipToNextOccurrence");
+	assert heads(e) == "0-3";
+	run(e, "skipToNextOccurrence");
+	assert heads(e) == "9-12";
+	run(e, "skipToNextOccurrence");
+	assert heads(e) == "0-3";
+	const two = editorAt("foo bar foo foo", [0]);
+	two.select({ ranges: [span(0, 3)], primary: 0 });
+	run(two, "selectNextOccurrence");
+	assert heads(two) == "0-3,8-11";
+	run(two, "skipToNextOccurrence");
+	assert heads(two) == "0-3,12-15";
+	assert two.selections.primary == 1;
+}
+
+test "subword motions stop inside identifiers and subword deletes are one step each" {
+	const run = runner();
+	const e = editorAt("fooBar_baz", [0]);
+	run(e, "subwordRight");
+	assert heads(e) == "3";
+	run(e, "selectSubwordRight");
+	assert heads(e) == "3-6";
+	run(e, "subwordLeft");
+	assert heads(e) == "3";
+	const del = editorAt("fooBar baz", [6]);
+	run(del, "deleteSubwordLeft");
+	assert del.doc.text() == "foo baz";
+	assert heads(del) == "3";
+	run(del, "deleteSubwordRight");
+	assert del.doc.text() == "foo";
+	run(del, "undo");
+	assert del.doc.text() == "foo baz";
+}
+
+test "scroll commands hand rows to the context and leave the selection alone" {
+	const scrolled: int32[] = [];
+	const run = runner([], null, scrolled);
+	const e = editorAt("a\nb\nc", [2]);
+	run(e, "scrollLineDown");
+	run(e, "scrollLineUp");
+	run(e, "scrollPageDown");
+	run(e, "scrollPageUp");
+	assert scrolled.length == 4;
+	assert scrolled[0] == 1 && scrolled[1] == -1 && scrolled[2] == 2 && scrolled[3] == -2;
+	assert heads(e) == "2";
+}
+
+test "selection undo goes back through motions and leaves the text as it is" {
+	const run = runner();
+	const e = editorAt("one two", [0]);
+	run(e, "wordRight");
+	run(e, "selectWordRight");
+	assert heads(e) == "3-7";
+	insertText(e, "X");
+	assert e.doc.text() == "oneX";
+	run(e, "undoSelection");
+	assert heads(e) == "3-4";
+	run(e, "undoSelection");
+	assert heads(e) == "3";
+	run(e, "undoSelection");
+	assert heads(e) == "0";
+	run(e, "redoSelection");
+	assert heads(e) == "3";
+	assert e.doc.text() == "oneX";
 }

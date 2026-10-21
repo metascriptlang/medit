@@ -85,24 +85,37 @@ export function defaultKeymap(): Keymap {
 		["shift+ArrowUp", "selectUp"], ["shift+ArrowDown", "selectDown"],
 		["ctrl+ArrowLeft", "wordLeft"], ["ctrl+ArrowRight", "wordRight"],
 		["ctrl+shift+ArrowLeft", "selectWordLeft"], ["ctrl+shift+ArrowRight", "selectWordRight"],
+		["ctrl+alt+ArrowLeft", "subwordLeft"], ["ctrl+alt+ArrowRight", "subwordRight"],
+		["ctrl+alt+shift+ArrowLeft", "selectSubwordLeft"],
+		["ctrl+alt+shift+ArrowRight", "selectSubwordRight"],
 		["Home", "home"], ["End", "end"], ["shift+Home", "selectHome"], ["shift+End", "selectEnd"],
 		["ctrl+Home", "docStart"], ["ctrl+End", "docEnd"],
 		["ctrl+shift+Home", "selectDocStart"], ["ctrl+shift+End", "selectDocEnd"],
 		["PageUp", "pageUp"], ["PageDown", "pageDown"],
 		["shift+PageUp", "selectPageUp"], ["shift+PageDown", "selectPageDown"],
+		["ctrl+ArrowUp", "scrollLineUp"], ["ctrl+ArrowDown", "scrollLineDown"],
+		["alt+PageUp", "scrollPageUp"], ["alt+PageDown", "scrollPageDown"],
 		["ctrl+a", "selectAll"], ["ctrl+l", "selectLine"], ["ctrl+d", "selectNextOccurrence"],
 		["ctrl+shift+l", "selectAllOccurrences"], ["ctrl+F2", "selectAllOccurrences"],
+		["ctrl+F3", "selectNextOccurrence"], ["ctrl+shift+F3", "selectPreviousOccurrence"],
+		["ctrl+k ctrl+d", "skipToNextOccurrence"],
 		["ctrl+m", "moveToEnclosingBracket"],
 		["ctrl+alt+ArrowUp", "addCursorAbove"], ["ctrl+alt+ArrowDown", "addCursorBelow"],
 		["Escape", "collapse"], ["alt+z", "toggleWrap"],
+		["ctrl+u", "undoSelection"], ["ctrl+shift+u", "redoSelection"],
 		["ctrl+Enter", "newlineBelow"], ["ctrl+shift+Enter", "newlineAbove"],
 		["alt+ArrowUp", "moveLineUp"], ["alt+ArrowDown", "moveLineDown"],
 		["ctrl+alt+shift+ArrowUp", "duplicateLineUp"], ["ctrl+alt+shift+ArrowDown", "duplicateLineDown"],
+		["alt+shift+ArrowUp", "duplicateLineUp"], ["alt+shift+ArrowDown", "duplicateLineDown"],
+		["ctrl+shift+j", "joinLines"],
 		["ctrl+shift+k", "deleteLine"], ["ctrl+/", "toggleComments"], ["ctrl+k ctrl+c", "toggleComments"],
 		["Enter", "newline"], ["shift+Enter", "newline"], ["NumpadEnter", "newline"],
 		["Tab", "tab"], ["shift+Tab", "outdent"],
+		["ctrl+]", "indent"], ["ctrl+[", "outdent"],
 		["Backspace", "backspace"], ["shift+Backspace", "backspace"], ["Delete", "delete"],
 		["ctrl+Backspace", "deleteWordLeft"], ["ctrl+Delete", "deleteWordRight"],
+		["ctrl+alt+Backspace", "deleteSubwordLeft"], ["ctrl+alt+Delete", "deleteSubwordRight"],
+		["alt+shift+h", "deleteSubwordLeft"], ["alt+shift+d", "deleteSubwordRight"],
 		["ctrl+z", "undo"], ["ctrl+y", "redo"], ["ctrl+shift+z", "redo"],
 		["ctrl+c", "copy"], ["ctrl+x", "cut"], ["ctrl+v", "paste"], ["ctrl+s", "save"],
 		["ctrl+f", "find"], ["ctrl+g", "goToLine"], ["ctrl+h", "replace"], ["F3", "findNext"], ["shift+F3", "findPrev"],
@@ -111,7 +124,9 @@ export function defaultKeymap(): Keymap {
 		["ctrl+Space", "showCompletions"], ["ctrl+i", "showSignatureHelp"], ["ctrl+shift+Space", "showSignatureHelp"],
 		["alt+shift+f", "format"], ["ctrl+k ctrl+f", "formatSelections"],
 		["F2", "rename"], ["shift+F12", "findReferences"], ["alt+shift+F12", "findReferences"],
-		["ctrl+shift+o", "outline"], ["ctrl+.", "codeActions"], ["alt+ArrowLeft", "goBack"], ["alt+ArrowRight", "goForward"],
+		["ctrl+shift+o", "outline"], ["ctrl+.", "codeActions"], ["ctrl+shift+;", "toggleInlayHints"],
+		["alt+ArrowLeft", "goBack"], ["alt+ArrowRight", "goForward"],
+		["alt+shift+ArrowRight", "expandSelection"], ["alt+shift+ArrowLeft", "shrinkSelection"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;
@@ -198,6 +213,34 @@ test "binding over a prefix or under a binding is refused" {
 	m.bind("ctrl+j", "join");
 	try { m.bind("ctrl+j ctrl+j", "y"); } catch (e) { refused += 1; }
 	assert refused == 2;
+}
+
+function chord(m: Keymap, k: KeyPress): string {
+	const r = m.feed(k);
+	return r.outcome == Outcome.Run ? r.command : r.outcome.toString();
+}
+
+test "the default map binds line, occurrence, subword, scroll and selection history keys" {
+	const m = defaultKeymap();
+	const at = (key: string, ctrl: boolean, alt: boolean, shift: boolean): KeyPress =>
+		({ key, ctrl, alt, shift, meta: false });
+	assert chord(m, at("]", true, false, false)) == "indent";
+	assert chord(m, at("[", true, false, false)) == "outdent";
+	assert chord(m, at("J", true, false, true)) == "joinLines";
+	assert chord(m, at("ArrowDown", false, true, true)) == "duplicateLineDown";
+	assert chord(m, at("ArrowDown", true, true, true)) == "duplicateLineDown";
+	assert chord(m, at("k", true, false, false)) == "Pending";
+	assert chord(m, at("d", true, false, false)) == "skipToNextOccurrence";
+	assert chord(m, at("F3", true, false, false)) == "selectNextOccurrence";
+	assert chord(m, at("F3", true, false, true)) == "selectPreviousOccurrence";
+	assert chord(m, at("ArrowLeft", true, true, false)) == "subwordLeft";
+	assert chord(m, at("ArrowRight", true, true, true)) == "selectSubwordRight";
+	assert chord(m, at("Backspace", true, true, false)) == "deleteSubwordLeft";
+	assert chord(m, at("d", false, true, true)) == "deleteSubwordRight";
+	assert chord(m, at("ArrowUp", true, false, false)) == "scrollLineUp";
+	assert chord(m, at("PageDown", false, true, false)) == "scrollPageDown";
+	assert chord(m, at("u", true, false, false)) == "undoSelection";
+	assert chord(m, at("U", true, false, true)) == "redoSelection";
 }
 
 test "the default map binds editing keys" {
