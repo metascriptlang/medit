@@ -47,6 +47,7 @@ export class Editor {
 	caseSensitive: boolean = false;
 	lineComment: string | null = null;
 	blockComment: BlockComment | null = null;
+	indent: string = "\t";
 	private autoclosed: Autoclosed[] = [];
 	wordwiseNext: Selections | null = null;
 	private undos: Vec<Step> = [];
