@@ -120,6 +120,18 @@ export class Session {
 		return this.server.documentHighlight(this.doc, offset, done);
 	}
 
+	prepares(): boolean { return this.server.prepares(); }
+
+	prepareRename(offset: int32, done: (range: [int32, int32] | null, error: string | null) => void): int32 {
+		return this.server.prepareRename(this.doc, offset, (s: Span | null, error: string | null): void => {
+			done(s === null ? null : [(s as Span).from, (s as Span).to], error);
+		});
+	}
+
+	rename(offset: int32, name: string, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
+		return this.server.rename(this.doc, offset, name, done);
+	}
+
 	cancel(id: int32): void { this.server.cancel(id); }
 
 	stop(): void {

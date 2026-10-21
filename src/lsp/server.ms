@@ -25,7 +25,7 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"completionList\":{\"itemDefaults\":[\"editRange\",\"insertTextFormat\",\"data\"]}},"
 	+ "\"signatureHelp\":{\"signatureInformation\":{\"documentationFormat\":[\"markdown\",\"plaintext\"],"
 	+ "\"parameterInformation\":{\"labelOffsetSupport\":true},\"activeParameterSupport\":true},\"contextSupport\":true},"
-	+ "\"formatting\":{},\"rangeFormatting\":{},\"documentHighlight\":{}"
+	+ "\"formatting\":{},\"rangeFormatting\":{},\"documentHighlight\":{},\"rename\":{\"prepareSupport\":true}"
 	+ "},"
 	+ "\"workspace\":{\"configuration\":true},"
 	+ "\"window\":{\"workDoneProgress\":false,\"showMessage\":{}}"
@@ -562,6 +562,57 @@ export class Server {
 		}, (message: string): void => { done(null, message); });
 	}
 
+	prepares(): boolean {
+		return this.capabilities.getDynamicField("renameProvider").getDynamicField("prepareProvider").asBoolean(false);
+	}
+
+	prepareRename(doc: Document, offset: int32, done: (range: Span | null, error: string | null) => void): int32 {
+		if (!this.prepares()) { return -1; }
+		const asked = doc.version();
+		return this.request(doc, "textDocument/prepareRename", this.at(doc, offset), (result: JsonValue, version: int32): void => {
+			if (!present(result)) {
+				done(null, null);
+				return;
+			}
+			if (result.getDynamicField("defaultBehavior").asBoolean(false)) {
+				const here = doc.offsetSince(asked, offset, Bias.Right);
+				const word: [int32, int32] = here === null ? [0, 0] : wordAround(doc, here as int32);
+				done(word[0] == word[1] ? null : { from: word[0], to: word[1] }, null);
+				return;
+			}
+			const range = result.getDynamicField("range");
+			const s = this.span(doc, version, rangeOf(present(range) ? range : result));
+			if (s === null) { done(null, "the answer names text no longer kept"); }
+			else { done(s, null); }
+		}, (message: string): void => { done(null, message); });
+	}
+
+	rename(doc: Document, offset: int32, name: string, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
+		if (!this.provides("renameProvider")) { return -1; }
+		const params = withField(this.at(doc, offset), "newName", quoted(name));
+		return this.request(doc, "textDocument/rename", params, (result: JsonValue, version: int32): void => {
+			if (present(result.getDynamicField("documentChanges"))) {
+				done(null, 0, "the answer edits through documentChanges, which medic does not ask for");
+				return;
+			}
+			const uri = (this.sync as DocumentSync).uri;
+			const changes = result.getDynamicField("changes");
+			let mine: JsonValue = jsonNull();
+			let others = 0;
+			const keys: string[] = match (changes.kind) {
+				JsonKind.Object => changes.keys,
+				_ => [],
+			};
+			for (const key of keys) {
+				if (key == uri) { mine = changes.getDynamicField(key); }
+				else if (changes.getDynamicField(key).length() > 0) { others += 1; }
+			}
+			const edits = this.edits(doc, version, mine);
+			if (edits === null) { done(null, 0, "the answer names text no longer kept"); }
+			else { done(edits as Edit[], others, null); }
+		}, (message: string): void => { done(null, 0, message); });
+	}
+
 	hover(doc: Document, offset: int32, done: (text: string, over: Span | null) => void): int32 {
 		if (!this.provides("hoverProvider")) { return -1; }
 		return this.ask(doc, "textDocument/hover", offset, (result: JsonValue, version: int32): void => {
@@ -681,7 +732,8 @@ when (testBuild) {
 		const d = new Document(text);
 		server.initialize(null, 1, (e: string | null): void => {});
 		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true},"
-			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"documentFormattingProvider\":true,\"documentHighlightProvider\":true}}"));
+			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"documentFormattingProvider\":true,\"documentHighlightProvider\":true,"
+			+ "\"renameProvider\":{\"prepareProvider\":true}}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		return [server, wire, d];
 	}
@@ -808,5 +860,48 @@ when (testBuild) {
 		const nid = server.documentHighlight(d, 1, (o: Occurrence[] | null): void => { found = o; });
 		server.receive(reply(nid, "null"));
 		assert found !== null && (found as Occurrence[]).length == 0;
+	}
+
+	test "a prepared rename gives the range, the word for the default behaviour, or nothing" {
+		const [server, wire, d] = completing("let abc = 1;\n");
+		let got: Span | null = null;
+		let error: string | null = null;
+		const keep = (range: Span | null, e: string | null): void => {
+			got = range;
+			error = e;
+		};
+		assert server.prepares();
+		const id = server.prepareRename(d, 5, keep);
+		assert wire.sent[wire.sent.length - 1].includes("\"method\":\"textDocument/prepareRename\"");
+		server.receive(reply(id, "{\"range\":{\"start\":{\"line\":0,\"character\":4},\"end\":{\"line\":0,\"character\":7}},\"placeholder\":\"abc\"}"));
+		assert got !== null && (got as Span).from == 4 && (got as Span).to == 7;
+		const did = server.prepareRename(d, 5, keep);
+		server.receive(reply(did, "{\"defaultBehavior\":true}"));
+		assert got !== null && (got as Span).from == 4 && (got as Span).to == 7;
+		const nid = server.prepareRename(d, 3, keep);
+		server.receive(reply(nid, "null"));
+		assert got === null && error === null;
+	}
+
+	test "a rename gives this document's edits and counts the other documents it edits" {
+		const [server, wire, d] = completing("ab = ab;\n");
+		let got: Edit[] = [];
+		let others = -1;
+		let error: string | null = null;
+		const keep = (edits: Edit[] | null, n: int32, e: string | null): void => {
+			if (edits !== null) { got = edits as Edit[]; }
+			others = n;
+			error = e;
+		};
+		const id = server.rename(d, 1, "cd", keep);
+		const sent = wire.sent[wire.sent.length - 1];
+		assert sent.includes("\"method\":\"textDocument/rename\"") && sent.includes("\"newName\":\"cd\"");
+		const edit = (from: int32, to: int32): string =>
+			`{"range":{"start":{"line":0,"character":${from}},"end":{"line":0,"character":${to}}},"newText":"cd"}`;
+		server.receive(reply(id, `{"changes":{"file:///b.ms":[${edit(0, 2)}],"file:///a.ms":[${edit(0, 2)},${edit(5, 7)}],"file:///c.ms":[]}}`));
+		assert got.length == 2 && got[1].from == 5 && got[1].text == "cd" && others == 1 && error === null;
+		const did = server.rename(d, 1, "cd", keep);
+		server.receive(reply(did, "{\"documentChanges\":[]}"));
+		assert error !== null;
 	}
 }
