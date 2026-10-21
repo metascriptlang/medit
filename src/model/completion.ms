@@ -1,7 +1,7 @@
 import { Bias, Document, Edit } from "./document";
 import { Editor, mapThrough } from "./editor";
 import { Sel, cursorAt, end, primaryRange, start } from "./selection";
-import { isWordByte } from "./motion";
+import { indentEnd, isWordByte } from "./motion";
 import { FuzzyMatch, charsOf, fuzzyMatch, isDigit, isLower, isUpper, lowered } from "../text/fuzzy";
 
 const KIND_KEYWORD: int32 = 14;
@@ -33,6 +33,7 @@ export struct Completion {
 	extraAt: int32;
 	resolved: boolean;
 	raw: string;
+	asIs: boolean;
 }
 
 export struct Choice {
@@ -270,6 +271,20 @@ export function chosenRange(doc: Document, c: Completion, cursor: int32, replace
 	return [from as int32, Math.max(to, cursor)];
 }
 
+function indentedAt(e: Editor, text: string, at: int32): string {
+	if (text.byteIndexOf("\n") < 0) { return text; }
+	const line = e.doc.lineOf(at);
+	const indent = e.doc.slice(e.doc.lineStart(line), Math.min(e.doc.indentEnd(line), at));
+	const lines = text.split("\n");
+	for (let k = 1; k < (lines.length as int32); k++) {
+		let tabs = 0;
+		while (tabs < lines[k].byteLength && lines[k].byteAt(tabs) == "\t".code) { tabs += 1; }
+		const body = lines[k].byteSlice(tabs, lines[k].byteLength);
+		lines[k] = body.byteLength == 0 && tabs == 0 ? "" : indent + e.indent.repeat(tabs) + body;
+	}
+	return lines.join("\n");
+}
+
 function overlaps(a: Edit, b: Edit): boolean {
 	return a.from < b.to && b.from < a.to || (a.from == a.to && a.from == b.from) || (b.from == b.to && b.from == a.from);
 }
@@ -308,7 +323,7 @@ export function accept(e: Editor, c: Completion, replace: boolean | null, group:
 				if (after <= doc.length() && doc.slice(r[1], after) == suffix) { r = [r[0], r[1] + lookahead]; }
 			}
 		}
-		placed.push({ edit: { from: r[0], to: r[1], text: c.newText }, caret: -1 });
+		placed.push({ edit: { from: r[0], to: r[1], text: c.asIs ? c.newText : indentedAt(e, c.newText, r[0]) }, caret: -1 });
 		lastTo = r[1];
 	}
 	let skipped = 0;
@@ -417,6 +432,20 @@ when (testBuild) {
 		assert accept(e, tail, null, "completion 2") == 0;
 		assert d.slice(19, d.length()) == "console";
 		assert e.undo() && d.slice(19, d.length()) == "conole";
+	}
+
+	test "a completion of several lines takes the indent of its line and the document's indent unit, unless asked as is" {
+		const d = new Document("\tif (x) ");
+		const e = new Editor(d);
+		e.indent = "  ";
+		e.select(single(8));
+		const block: Completion = { ...item("{}", null, 15), newText: "{\n\tbody;\n\n}", replaceFrom: 8, replaceTo: 8, insertTo: 8 };
+		assert accept(e, block, null, "completion 1") == 0;
+		assert d.text() == "\tif (x) {\n\t  body;\n\n\t}";
+		assert e.undo();
+		const kept: Completion = { ...block, asIs: true };
+		assert accept(e, kept, null, "completion 2") == 0;
+		assert d.text() == "\tif (x) {\n\tbody;\n\n}";
 	}
 
 	test "every cursor with the same typed prefix takes the completion, and late extra edits join its undo step" {

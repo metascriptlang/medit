@@ -24,9 +24,9 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"completion\":{\"completionItem\":{\"snippetSupport\":false,\"insertReplaceSupport\":true,"
 	+ "\"resolveSupport\":{\"properties\":[\"documentation\",\"detail\",\"additionalTextEdits\"]},"
 	+ "\"documentationFormat\":[\"markdown\",\"plaintext\"],\"deprecatedSupport\":true,"
-	+ "\"tagSupport\":{\"valueSet\":[1]}},"
+	+ "\"tagSupport\":{\"valueSet\":[1]},\"insertTextModeSupport\":{\"valueSet\":[1,2]}},"
 	+ "\"contextSupport\":true,"
-	+ "\"completionList\":{\"itemDefaults\":[\"editRange\",\"insertTextFormat\",\"data\"]}},"
+	+ "\"completionList\":{\"itemDefaults\":[\"editRange\",\"insertTextFormat\",\"insertTextMode\",\"data\"]}},"
 	+ "\"signatureHelp\":{\"signatureInformation\":{\"documentationFormat\":[\"markdown\",\"plaintext\"],"
 	+ "\"parameterInformation\":{\"labelOffsetSupport\":true},\"activeParameterSupport\":true},\"contextSupport\":true},"
 	+ "\"formatting\":{},\"rangeFormatting\":{},\"documentHighlight\":{},\"rename\":{\"prepareSupport\":true},"
@@ -484,6 +484,7 @@ export class Server {
 			extra: extra as Edit[],
 			extraAt: now,
 			resolved: false,
+			asIs: item.getDynamicField("insertTextMode").asInt32(defaults.getDynamicField("insertTextMode").asInt32(ADJUST_INDENTATION)) == AS_IS,
 			raw: present(defaultData) && !present(item.getDynamicField("data")) ? withField(raw, "data", stringify(defaultData)) : raw,
 		};
 	}
@@ -973,7 +974,7 @@ when (testBuild) {
 		assert wire.sent[wire.sent.length - 1].includes("\"context\":{\"triggerKind\":2,\"triggerCharacter\":\".\"}}");
 	}
 
-	test "a completion list's defaults give the ranges, the text and the data sent back to resolve" {
+	test "a completion list's defaults give the ranges, the text, its indent mode and the data sent back to resolve" {
 		const [server, wire, d] = completing("x.lo\n");
 		let got: Completion[] = [];
 		let more = false;
@@ -984,14 +985,14 @@ when (testBuild) {
 		server.receive(reply(id, "{\"isIncomplete\":true,\"itemDefaults\":{"
 			+ "\"editRange\":{\"insert\":{\"start\":{\"line\":0,\"character\":2},\"end\":{\"line\":0,\"character\":4}},"
 			+ "\"replace\":{\"start\":{\"line\":0,\"character\":2},\"end\":{\"line\":0,\"character\":4}}},"
-			+ "\"insertTextFormat\":2,\"data\":{\"n\":1}},\"items\":["
+			+ "\"insertTextFormat\":2,\"insertTextMode\":1,\"data\":{\"n\":1}},\"items\":["
 			+ "{\"label\":\"log\",\"textEditText\":\"log(${1:x})$0\"},"
 			+ "{\"label\":\"b\",\"textEdit\":{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":1}},\"newText\":\"b\"},"
 			+ "\"additionalTextEdits\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}},\"newText\":\"use\\n\"}],"
-			+ "\"insertTextFormat\":1,\"data\":{\"own\":2}}]}"));
+			+ "\"insertTextFormat\":1,\"insertTextMode\":2,\"data\":{\"own\":2}}]}"));
 		assert got.length == 2 && more;
 		assert got[0].newText == "log(x)" && got[0].replaceFrom == 2 && got[0].replaceTo == 4 && got[0].insertTo == 4;
-		assert got[0].raw.includes("\"data\":{\"n\":1}");
+		assert got[0].raw.includes("\"data\":{\"n\":1}") && got[0].asIs && !got[1].asIs;
 		assert got[1].newText == "b" && got[1].replaceFrom == 0 && got[1].replaceTo == 1 && got[1].insertTo === null;
 		assert got[1].extra.length == 1 && got[1].extra[0].text == "use\n" && got[1].raw.includes("\"own\":2") && !got[1].raw.includes("\"n\":1");
 		let resolved: Completion | null = null;
