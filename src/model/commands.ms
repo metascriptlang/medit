@@ -15,6 +15,7 @@ import { Sel, Selections, cursorAt, primaryRange, sameSelections, single, span }
 import { Query, nextMatch, selectAllMatches } from "./find";
 import { pairAround, typeText } from "./pairs";
 import { BracketPair, enclosingBrackets } from "./brackets";
+import { MenuMove } from "./completer";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../view/wrap";
 
 const OUTDENT_SPACES: int32 = 4;
@@ -36,6 +37,10 @@ export interface Context {
 	hover: () => void;
 	goToDefinition: () => void;
 	goToDiagnostic: (forward: boolean) => void;
+	showCompletions: () => void;
+	completionMenu: (move: MenuMove) => void;
+	confirmCompletion: (replace: boolean | null) => void;
+	hideCompletions: () => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -647,6 +652,14 @@ export function commands(): Map<string, Command> {
 	table.set("goToDefinition", (e: Editor, cx: Context): void => { cx.goToDefinition(); });
 	table.set("nextDiagnostic", (e: Editor, cx: Context): void => { cx.goToDiagnostic(true); });
 	table.set("prevDiagnostic", (e: Editor, cx: Context): void => { cx.goToDiagnostic(false); });
+	table.set("showCompletions", (e: Editor, cx: Context): void => { cx.showCompletions(); });
+	table.set("completionPrevious", (e: Editor, cx: Context): void => { cx.completionMenu(MenuMove.Previous); });
+	table.set("completionNext", (e: Editor, cx: Context): void => { cx.completionMenu(MenuMove.Next); });
+	table.set("completionFirst", (e: Editor, cx: Context): void => { cx.completionMenu(MenuMove.First); });
+	table.set("completionLast", (e: Editor, cx: Context): void => { cx.completionMenu(MenuMove.Last); });
+	table.set("confirmCompletion", (e: Editor, cx: Context): void => { cx.confirmCompletion(null); });
+	table.set("confirmCompletionReplace", (e: Editor, cx: Context): void => { cx.confirmCompletion(true); });
+	table.set("hideCompletions", (e: Editor, cx: Context): void => { cx.hideCompletions(); });
 	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -700,12 +713,12 @@ function editorAt(text: string, offsets: Span<int32>): Editor {
 }
 
 when (testBuild) {
-	import { defaultKeymap } from "../input/keymap";
+	import { completionKeymap, defaultKeymap } from "../input/keymap";
 
-	test "every default binding names a command" {
+	test "every binding names a command" {
 		const table = commands();
 		const missing: string[] = [];
-		for (const name of defaultKeymap().commands()) {
+		for (const name of [...defaultKeymap().commands(), ...completionKeymap().commands()]) {
 			if (!table.has(name)) { missing.push(name); }
 		}
 		assert missing.length == 0;
@@ -742,6 +755,10 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		hover: (): void => {},
 		goToDefinition: (): void => {},
 		goToDiagnostic: (forward: boolean): void => {},
+		showCompletions: (): void => {},
+		completionMenu: (move: MenuMove): void => {},
+		confirmCompletion: (replace: boolean | null): void => {},
+		hideCompletions: (): void => {},
 	};
 	return (e: Editor, name: string): void => {
 		const command = table.get(name);

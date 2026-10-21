@@ -108,6 +108,21 @@ export function defaultKeymap(): Keymap {
 		["ctrl+f", "find"], ["ctrl+g", "goToLine"], ["ctrl+h", "replace"], ["F3", "findNext"], ["shift+F3", "findPrev"],
 		["ctrl+Insert", "copy"], ["shift+Delete", "cut"], ["shift+Insert", "paste"],
 		["ctrl+k ctrl+i", "hover"], ["F12", "goToDefinition"], ["F8", "nextDiagnostic"], ["shift+F8", "prevDiagnostic"],
+		["ctrl+Space", "showCompletions"],
+	];
+	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
+	return keymap;
+}
+
+// Keys that act on the completion menu while it shows, ahead of the default map.
+export function completionKeymap(): Keymap {
+	const keymap = new Keymap();
+	const bindings: Array<[string, string]> = [
+		["ArrowUp", "completionPrevious"], ["ctrl+p", "completionPrevious"],
+		["ArrowDown", "completionNext"], ["ctrl+n", "completionNext"],
+		["PageUp", "completionFirst"], ["PageDown", "completionLast"],
+		["Enter", "confirmCompletion"], ["NumpadEnter", "confirmCompletion"], ["Tab", "confirmCompletion"],
+		["shift+Enter", "confirmCompletionReplace"], ["Escape", "hideCompletions"],
 	];
 	for (const [sequence, command] of bindings) { keymap.bind(sequence, command); }
 	return keymap;
