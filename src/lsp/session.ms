@@ -4,6 +4,7 @@ import { Completion } from "../model/completion";
 import { SignatureAsk, SignatureHelp } from "../model/signatures";
 import { Occurrence } from "../model/occurrences";
 import { Place } from "../model/references";
+import { OutlineItem } from "../model/outline";
 import { Server, Span, Target } from "./server";
 
 export interface Link {
@@ -134,6 +135,10 @@ export class Session {
 				here: t.here === null ? null : [(t.here as Span).from, (t.here as Span).to],
 			})));
 		});
+	}
+
+	documentSymbols(done: (found: OutlineItem[] | null) => void): int32 {
+		return this.server.documentSymbols(this.doc, done);
 	}
 
 	prepares(): boolean { return this.server.prepares(); }

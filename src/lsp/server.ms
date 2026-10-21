@@ -3,6 +3,7 @@ import { Diagnostic, Severity } from "../model/diagnostics";
 import { Completion, snippetText, wordAround } from "../model/completion";
 import { Parameter, Signature, SignatureAsk, SignatureHelp } from "../model/signatures";
 import { Occurrence } from "../model/occurrences";
+import { OutlineItem } from "../model/outline";
 import { refined } from "../model/patch";
 import { Client, NotificationHandler, Reply, failed, quoted } from "./client";
 import { DocumentSync, SyncKind } from "./sync";
@@ -25,7 +26,8 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"completionList\":{\"itemDefaults\":[\"editRange\",\"insertTextFormat\",\"data\"]}},"
 	+ "\"signatureHelp\":{\"signatureInformation\":{\"documentationFormat\":[\"markdown\",\"plaintext\"],"
 	+ "\"parameterInformation\":{\"labelOffsetSupport\":true},\"activeParameterSupport\":true},\"contextSupport\":true},"
-	+ "\"formatting\":{},\"rangeFormatting\":{},\"documentHighlight\":{},\"rename\":{\"prepareSupport\":true}"
+	+ "\"formatting\":{},\"rangeFormatting\":{},\"documentHighlight\":{},\"rename\":{\"prepareSupport\":true},"
+	+ "\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true}"
 	+ "},"
 	+ "\"workspace\":{\"configuration\":true},"
 	+ "\"window\":{\"workDoneProgress\":false,\"showMessage\":{}}"
@@ -120,6 +122,19 @@ const INVOKED: int32 = 1;
 const TRIGGER_CHARACTER: int32 = 2;
 
 function present(v: JsonValue): boolean { return !isKind(v, JsonKind.Null); }
+
+function inDocumentOrder(found: OutlineItem[], flat: boolean): OutlineItem[] {
+	const sorted = found.slice(0);
+	sorted.sort((a: OutlineItem, b: OutlineItem) => a.from != b.from ? a.from - b.from : a.depth != b.depth ? a.depth - b.depth : b.to - a.to);
+	if (!flat) { return sorted; }
+	const open: int32[] = [];
+	return sorted.map((s: OutlineItem): OutlineItem => {
+		while (open.length > 0 && open[open.length - 1] <= s.from) { open.pop(); }
+		const depth = open.length as int32;
+		open.push(s.to);
+		return { ...s, depth };
+	});
+}
 
 // A JSON object's text with one more field; `object` is the text of a non-empty object.
 function withField(object: string, name: string, value: string): string {
@@ -640,6 +655,40 @@ export class Server {
 		}, (message: string): void => { done(null); });
 	}
 
+	documentSymbols(doc: Document, done: (found: OutlineItem[] | null) => void): int32 {
+		if (!this.provides("documentSymbolProvider")) { return -1; }
+		const params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}}}`;
+		return this.request(doc, "textDocument/documentSymbol", params, (result: JsonValue, version: int32): void => {
+			const found: OutlineItem[] = [];
+			let flat = false;
+			const walk = (list: JsonValue, depth: int32): boolean => {
+				for (let i = 0; i < list.length(); i++) {
+					const s = list.at(i);
+					const location = s.getDynamicField("location");
+					flat = flat || present(location);
+					if (present(location) && location.getDynamicField("uri").asString() != this.uri()) { continue; }
+					const span = this.span(doc, version, rangeOf(present(location) ? location.getDynamicField("range") : s.getDynamicField("range")));
+					if (span === null) { return false; }
+					found.push({
+						name: s.getDynamicField("name").asString(),
+						kind: s.getDynamicField("kind").asInt32(0),
+						depth,
+						from: (span as Span).from,
+						to: (span as Span).to,
+					});
+					const children = s.getDynamicField("children");
+					if (present(children) && !walk(children, depth + 1)) { return false; }
+				}
+				return true;
+			};
+			if (present(result) && !walk(result, 0)) {
+				done(null);
+				return;
+			}
+			done(inDocumentOrder(found, flat));
+		}, (message: string): void => { done(null); });
+	}
+
 	definition(doc: Document, offset: int32, done: (found: Target[]) => void): int32 {
 		if (!this.provides("definitionProvider")) { return -1; }
 		return this.ask(doc, "textDocument/definition", offset, (result: JsonValue, version: int32): void => {
@@ -747,7 +796,7 @@ when (testBuild) {
 		server.initialize(null, 1, (e: string | null): void => {});
 		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true},"
 			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"documentFormattingProvider\":true,\"documentHighlightProvider\":true,"
-			+ "\"renameProvider\":{\"prepareProvider\":true},\"referencesProvider\":true}}"));
+			+ "\"renameProvider\":{\"prepareProvider\":true},\"referencesProvider\":true,\"documentSymbolProvider\":true}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		return [server, wire, d];
 	}
@@ -933,5 +982,27 @@ when (testBuild) {
 		const nid = server.references(d, 1, (t: Target[] | null): void => { found = t; });
 		server.receive(reply(nid, "null"));
 		assert found !== null && (found as Target[]).length == 0;
+	}
+
+	test "document symbols come nested by their children, or flat by which range holds which" {
+		const [server, wire, d] = completing("class A {\n\tf() {}\n}\nlet b;\n");
+		let found: OutlineItem[] | null = null;
+		const id = server.documentSymbols(d, (s: OutlineItem[] | null): void => { found = s; });
+		assert wire.sent[wire.sent.length - 1].includes("\"method\":\"textDocument/documentSymbol\"");
+		server.receive(reply(id, "[{\"name\":\"b\",\"kind\":13,\"range\":{\"start\":{\"line\":3,\"character\":4},\"end\":{\"line\":3,\"character\":5}}},"
+			+ "{\"name\":\"A\",\"kind\":5,\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":2,\"character\":1}},"
+			+ "\"children\":[{\"name\":\"f\",\"kind\":6,\"range\":{\"start\":{\"line\":1,\"character\":1},\"end\":{\"line\":1,\"character\":7}}}]}]"));
+		const nested = found as OutlineItem[];
+		assert nested.length == 3 && nested[0].name == "A" && nested[0].to == 19;
+		assert nested[1].name == "f" && nested[1].depth == 1 && nested[1].from == 11 && nested[2].name == "b" && nested[2].from == 24;
+		const fid = server.documentSymbols(d, (s: OutlineItem[] | null): void => { found = s; });
+		server.receive(reply(fid, "[{\"name\":\"f\",\"kind\":6,\"location\":{\"uri\":\"file:///a.ms\",\"range\":{\"start\":{\"line\":1,\"character\":1},\"end\":{\"line\":1,\"character\":7}}}},"
+			+ "{\"name\":\"g\",\"kind\":12,\"location\":{\"uri\":\"file:///b.ms\",\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":1}}}},"
+			+ "{\"name\":\"A\",\"kind\":5,\"location\":{\"uri\":\"file:///a.ms\",\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":2,\"character\":1}}}}]"));
+		const flat = found as OutlineItem[];
+		assert flat.length == 2 && flat[0].name == "A" && flat[0].depth == 0 && flat[1].name == "f" && flat[1].depth == 1;
+		const nid = server.documentSymbols(d, (s: OutlineItem[] | null): void => { found = s; });
+		server.receive(reply(nid, "null"));
+		assert found !== null && (found as OutlineItem[]).length == 0;
 	}
 }
