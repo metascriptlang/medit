@@ -26,6 +26,7 @@ import { Formatter } from "../../../../model/format";
 import { Occurrence, Occurrences } from "../../../../model/occurrences";
 import { Renamer, Renaming } from "../../../../model/rename";
 import { Place, References } from "../../../../model/references";
+import { Outline, OutlineItem } from "../../../../model/outline";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, referencesKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
@@ -47,6 +48,7 @@ import { createFinder } from "../find/finder";
 import { GoToBar } from "../goto/goToBar";
 import { RenameField } from "../rename/renameField";
 import { referenceColumns, referenceRows } from "../references/referenceList";
+import { OUTLINE_PADDING, OUTLINE_ROWS, OutlinePicker, outlineColumns, outlineRows } from "../outline/outlinePicker";
 import { HoverCard, cardOf, cardSize, placed } from "../hover/hoverCard";
 import { CompletionMenu, MENU_BORDER, MENU_ROWS, menuColumns, menuPlaced, menuRows, scrolledTop } from "../completion/completionMenu";
 import { signatureCard, signaturePlaced } from "../signature/signatureCard";
@@ -126,6 +128,16 @@ export function EditorPane(props: {
 	let listTop = 0;
 	let placeReferences: () => void = (): void => {};
 	let referencesChanged: () => void = (): void => {};
+	const [outlined, setOutlined] = createSignal<boolean>(false);
+	const [outlineQuery, setOutlineQuery] = createSignal<string>("");
+	const [outlineBox, setOutlineBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const [outlinePick, setOutlinePick] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const outlineLines: List<Row> = createList<Row>([]);
+	let outlineTop = 0;
+	let outlineFrom: Viewport | null = null;
+	let outlineHead = -1;
+	let placeOutline: () => void = (): void => {};
+	let outlineChanged: () => void = (): void => {};
 	let goingFrom: Viewport | null = null;
 	let goText = "";
 	let notice: string | null = null;
@@ -341,6 +353,7 @@ export function EditorPane(props: {
 		placeSignature();
 		placeRename();
 		placeReferences();
+		placeOutline();
 		report();
 	};
 
@@ -539,6 +552,62 @@ export function EditorPane(props: {
 		setListBox(place.box);
 		setListed(true);
 	};
+	const outline = new Outline(editor, {
+		ask: (done: (found: OutlineItem[] | null) => void): int32 =>
+			session === null ? -1 : (session as Session).documentSymbols(done),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+	}, (message: string): void => {
+		notice = message;
+		paint();
+	}, (): void => { outlineChanged(); });
+	outlineChanged = (): void => {
+		if (!outline.shown()) {
+			if (outlined()) {
+				outlineFrom = null;
+				setOutlineQuery("");
+				setOutlined(false);
+			}
+			paint();
+			return;
+		}
+		const head = editor.selections.primaryRange().head;
+		if (outlineFrom === null) {
+			outlineFrom = view;
+			outlineHead = head;
+			outlineTop = 0;
+		}
+		view = head == outlineHead ? outlineFrom as Viewport : view.centered(doc.lineOf(head), doc.lineCount(), rowsIn);
+		paint();
+	};
+	placeOutline = (): void => {
+		if (!outline.shown() || grid.cellWidth <= 0) { return; }
+		const total = outline.rows().length as int32;
+		const columns = outlineColumns(outline);
+		const count = Math.max(1, Math.min(OUTLINE_ROWS, view.rows - 3));
+		outlineTop = scrolledTop(outlineTop, outline.selected, count, total);
+		fill(outlineLines, outlineRows(outline, outlineTop, count, columns));
+		const width = columns * grid.cellWidth + 2 * OUTLINE_PADDING;
+		setOutlinePick({
+			x: 0,
+			y: (outline.selected - outlineTop) * grid.rowHeight,
+			width: columns * grid.cellWidth,
+			height: total == 0 ? 0 : grid.rowHeight,
+			color: SELECTION,
+		});
+		setOutlineBox({ x: Math.max(0, (areaWidth - width) / 2), y: 0, width, height: Math.min(total, count) * grid.rowHeight, color: PANEL });
+		if (!outlined()) { setOutlined(true); }
+	};
+	const outlineConfirmed = (): void => {
+		outline.confirm();
+		view = view.centered(doc.lineOf(editor.selections.primaryRange().head), doc.lineCount(), rowsIn);
+		paint();
+		focus();
+	};
+	const outlineCancelled = (): void => {
+		if (outlineFrom !== null) { view = outlineFrom as Viewport; }
+		outline.dismiss();
+		focus();
+	};
 	placeRename = (): void => {
 		const at = renamer.renaming();
 		if (at === null || grid.cellWidth <= 0) { return; }
@@ -652,6 +721,11 @@ export function EditorPane(props: {
 		moveReference: (move: MenuMove): void => { references.move(move); },
 		confirmReference: (): void => { references.confirm(); },
 		hideReferences: (): void => { references.dismiss(); },
+		outline: (): void => {
+			completer.hide();
+			references.close();
+			outline.open();
+		},
 		goToLine: (): void => {
 			goingFrom = view;
 			setGoingTo(true);
@@ -718,6 +792,7 @@ export function EditorPane(props: {
 			}
 			references.close();
 		}
+		outline.close();
 		if (completer.shown() && keymap.pendingChords() == "") {
 			const m = menuKeys.feed(key);
 			if (m.outcome == Outcome.Run) {
@@ -769,6 +844,7 @@ export function EditorPane(props: {
 		hideCard();
 		if (renamed()) { renamer.cancel(); }
 		references.close();
+		outline.close();
 		if (grid.cellWidth <= 0 || e.button != 1) { return; }
 		if (overMenu(e)) {
 			completer.pick(menuTop + (Math.floor((e.locationY - menuBox().y - MENU_BORDER) / grid.rowHeight) as int32));
@@ -950,6 +1026,23 @@ export function EditorPane(props: {
 			changed={goChanged}
 			confirmed={goConfirmed}
 			cancelled={goCancelled}
+		/>
+		<OutlinePicker
+			shown={outlined()}
+			box={outlineBox()}
+			selected={outlinePick()}
+			rows={outlineLines}
+			query={outlineQuery()}
+			cellWidth={drawn().cellWidth}
+			rowHeight={drawn().rowHeight}
+			attach={(input: TextInputHandle): void => { input.focus(); }}
+			changed={(text: string): void => {
+				setOutlineQuery(text);
+				outline.search(text);
+			}}
+			moved={(m: MenuMove): void => { outline.move(m); }}
+			confirmed={outlineConfirmed}
+			cancelled={outlineCancelled}
 		/>
 		<RenameField
 			shown={renamed()}
