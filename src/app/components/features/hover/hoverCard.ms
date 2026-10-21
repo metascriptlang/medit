@@ -28,14 +28,22 @@ function line(text: string, color: string): Row {
 	return { spans: [{ text, style: { color } }] };
 }
 
-function toned(l: HoverLine, source: string, tones: Tone[]): Row {
+// A code line in its tones, or plain, with the bytes `mark` covers of its block's source underlined.
+function toned(l: HoverLine, source: string, tones: Tone[] | null, mark: int32[]): Row {
 	const end = l.at + (l.text.byteLength as int32);
+	const marked = (k: int32): boolean => mark.length == 2 && k >= mark[0] && k < mark[1];
+	const alike = (a: int32, b: int32): boolean =>
+		marked(a) == marked(b) && (tones === null || (tones as Tone[])[a] == (tones as Tone[])[b]);
 	const spans: TextSpan[] = [];
 	let from = l.at;
 	while (from < end) {
 		let to = from + 1;
-		while (to < end && tones[to] == tones[from]) { to++; }
-		spans.push({ text: source.byteSlice(from, to), style: { color: colorOf(tones[from]) } });
+		while (to < end && alike(to, from)) { to++; }
+		const color = tones === null ? FOREGROUND : colorOf((tones as Tone[])[from]);
+		const text = source.byteSlice(from, to);
+		spans.push(marked(from)
+			? { text, style: { color, textDecorationLine: "underline", textDecorationColor: color } }
+			: { text, style: { color } });
 		from = to;
 	}
 	return spans.length == 0 ? line("", FOREGROUND) : { spans };
@@ -47,7 +55,8 @@ function widthOf(r: Row): int32 {
 	return n;
 }
 
-export function cardOf(diagnostics: Diagnostic[], markdown: string, columns: int32, highlight: Highlight): Card {
+// `emphasis`, a byte range of the first code block, is underlined.
+export function cardOf(diagnostics: Diagnostic[], markdown: string, columns: int32, highlight: Highlight, emphasis: int32[] = []): Card {
 	const width = Math.max(1, Math.min(MAX_COLUMNS, columns - 2 * INSET_CELLS));
 	const problems: Row[] = [];
 	for (const d of diagnostics) {
@@ -60,8 +69,7 @@ export function cardOf(diagnostics: Diagnostic[], markdown: string, columns: int
 	const info: Row[] = [];
 	for (const l of hover.lines) {
 		if (l.kind == LineKind.Code) {
-			const t = tones[l.block];
-			info.push(t === null ? line(l.text, FOREGROUND) : toned(l, hover.blocks[l.block].source, t as Tone[]));
+			info.push(toned(l, hover.blocks[l.block].source, tones[l.block], l.block == 0 ? emphasis : []));
 		} else {
 			info.push(line(l.text, MUTED));
 		}
