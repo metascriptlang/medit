@@ -11,5 +11,6 @@ int64_t serverWrite(int id, const uint8_t* data, int64_t len);
 int serverEnded(int id);
 int serverExitCode(int id);
 void serverClose(int id);
+int serverParentId(void);
 
 #endif

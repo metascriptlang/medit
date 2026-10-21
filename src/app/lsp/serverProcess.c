@@ -263,3 +263,7 @@ void serverClose(int id) {
 	free(s->out);
 	memset(s, 0, sizeof *s);
 }
+
+int serverParentId(void) {
+	return (int)GetCurrentProcessId();
+}

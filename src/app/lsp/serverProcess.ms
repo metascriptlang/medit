@@ -11,6 +11,7 @@ extern function serverWrite(id: int32, data: Readonly<Span<uint8>>): int64;
 extern function serverEnded(id: int32): int32;
 extern function serverExitCode(id: int32): int32;
 extern function serverClose(id: int32): void;
+extern function serverParentId(): int32;
 
 export struct ServerProcess {
 	id: int32;
@@ -35,6 +36,8 @@ export function exitCode(this p: ServerProcess): int32 | null {
 }
 
 export function stop(this p: ServerProcess): void { serverClose(p.id); }
+
+export function ownProcessId(): int32 { return serverParentId(); }
 
 when (testBuild) {
 	import { Client, Reply } from "../../lsp/client";
