@@ -112,3 +112,36 @@ msString pageQuery(const char* name) {
 	free(value);
 	return out;
 }
+
+static int requestStatus;
+
+EM_JS(char*, medicJsRequest, (const char* method, const char* base, const char* path, const uint8_t* body, int len, int* status, int* length), {
+	const xhr = new XMLHttpRequest();
+	let text;
+	try {
+		xhr.open(UTF8ToString(method), UTF8ToString(base) + "/file?path=" + encodeURIComponent(UTF8ToString(path)), false);
+		xhr.send(body ? HEAPU8.slice(body, body + len) : null);
+		HEAP32[status >> 2] = xhr.status;
+		text = xhr.responseText;
+	} catch (e) {
+		HEAP32[status >> 2] = 0;
+		text = String(e);
+	}
+	const size = lengthBytesUTF8(text) + 1;
+	const out = _malloc(size);
+	stringToUTF8(text, out, size);
+	HEAP32[length >> 2] = size - 1;
+	return out;
+});
+
+msString fileRequest(const char* method, const char* base, const char* path, const uint8_t* body, int64_t len) {
+	int length = 0;
+	char* text = medicJsRequest(method, base, path, body, (int)len, &requestStatus, &length);
+	msString out = msStringNew(text, (int64_t)length);
+	free(text);
+	return out;
+}
+
+int fileStatus(void) {
+	return requestStatus;
+}
