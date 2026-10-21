@@ -27,11 +27,13 @@ import { Occurrence, Occurrences } from "../../../../model/occurrences";
 import { Renamer, Renaming } from "../../../../model/rename";
 import { Place, References } from "../../../../model/references";
 import { CodeAction, CodeActions } from "../../../../model/actions";
+import { Inlay, InlayHints } from "../../../../model/inlays";
 import { Outline, OutlineItem } from "../../../../model/outline";
 import { NavHistory, Spot } from "../../../../model/history";
+import { Expander } from "../../../../model/expand";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, listKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
-import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
+import { VisualRow, cellIn, offsetIn, rowCells, rowIndexOf, rowsOf, shownCellIn } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
 import { Bias, Document, Edit } from "../../../../model/document";
 import { Tone } from "../../../../view/tone";
@@ -100,6 +102,7 @@ export function EditorPane(props: {
 	let areaHeight = 0.0;
 	let wrap = false;
 	let frame: VisualRow[] = [];
+	let frameHints: Inlay[] = [];
 	let gesture: Gesture | null = null;
 	let lastPress = 0.0;
 	let lastOffset = -1;
@@ -203,9 +206,27 @@ export function EditorPane(props: {
 	let seenTop = 0;
 	let jumping = false;
 	const extension = props.path.lastIndexOf(".") < 0 ? "" : props.path.slice(props.path.lastIndexOf(".") + 1);
+	let hintsChanged: () => void = (): void => {};
+	const hints = new InlayHints(doc, {
+		ask: (from: int32, to: int32, done: (found: Inlay[] | null) => void): int32 =>
+			session === null ? -1 : (session as Session).inlayHints(from, to, done),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+		wait: (ms: int32, run: () => void): int32 => setTimeout(run, ms) as int32,
+		stopWaiting: (timer: int32): void => { clearTimeout(timer); },
+	}, (message: string): void => {
+		notice = message;
+		hintsChanged();
+	}, (): void => { hintsChanged(); });
+	const lineHints = (line: int32): Inlay[] => hints.within(doc.lineStart(line), doc.lineEnd(line));
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
-	const rowsIn = (line: int32): int32 => rowsOf(doc, line, wrapWidth()).length as int32;
+	const lineRowsOf = (line: int32): Vec<VisualRow> => rowsOf(doc, line, wrapWidth(), wrap ? lineHints(line) : []);
+	const rowsIn = (line: int32): int32 => lineRowsOf(line).length as int32;
+
+	const frameUp = (): void => {
+		frame = framed(doc, view, wrapWidth(), lineHints);
+		frameHints = frame.length == 0 ? [] : hints.within(frame[0].from, frame[frame.length - 1].to);
+	};
 
 	const fit = (): void => {
 		const cols = columns - gutterWidth(doc.lineCount());
@@ -310,7 +331,7 @@ export function EditorPane(props: {
 		}
 		const total = completer.choices.length as int32;
 		const columns = menuColumns(completer.items, completer.choices);
-		const cell = Math.max(0, cellIn(doc, frame[row], word) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[row], word, frameHints) - view.left);
 		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
 		const place = menuPlaced(columns, Math.min(total, MENU_ROWS), x, row, view.rows, grid.rowHeight, grid.cellWidth, areaWidth, PANEL);
 		menuTop = scrolledTop(menuTop, completer.selected, place.rows, total);
@@ -339,7 +360,7 @@ export function EditorPane(props: {
 			return;
 		}
 		const card = signatureCard(help as SignatureHelp, signer.current, extension, columns, view.rows, highlight);
-		const cell = Math.max(0, cellIn(doc, frame[row], head) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[row], head, frameHints) - view.left);
 		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
 		const menu = menued() ? menuBox() : null;
 		setSignBox(signaturePlaced(card, x, row * grid.rowHeight, grid.rowHeight, grid.cellWidth, areaWidth, areaHeight, menu));
@@ -359,9 +380,10 @@ export function EditorPane(props: {
 			seenTop = view.line;
 		}
 		if (session !== null) { (session as Session).edited(); }
-		frame = framed(doc, view, wrapWidth());
+		frameUp();
+		if (frame.length > 0) { hints.visible(frame[0].from, frame[frame.length - 1].to); }
 		const shownOccurrences = frame.length == 0 ? [] : occurrences.within(frame[0].from, frame[frame.length - 1].to);
-		const p = painted(doc, editor.selections, marked(), bracketed(), shownOccurrences, frame, view, syntax, visibleDiagnostics(), grid);
+		const p = painted(doc, editor.selections, marked(), bracketed(), shownOccurrences, frame, view, syntax, visibleDiagnostics(), grid, frameHints);
 		fill(rows, p.rows);
 		fill(shades, p.shades);
 		fill(carets, p.carets);
@@ -379,10 +401,10 @@ export function EditorPane(props: {
 		fit();
 		const head = editor.selections.primaryRange().head;
 		const line = doc.lineOf(head);
-		const lineRows = rowsOf(doc, line, wrapWidth());
+		const lineRows = lineRowsOf(line);
 		const k = rowIndexOf(lineRows, head);
 		view = view.revealed(line, k, doc.lineCount(), rowsIn);
-		if (!wrap) { view = view.revealedCell(cellIn(doc, lineRows[k], head)); }
+		if (!wrap) { view = view.revealedCell(cellIn(doc, lineRows[k], head, lineHints(line))); }
 		paint();
 	};
 
@@ -392,6 +414,7 @@ export function EditorPane(props: {
 
 	let hoverSeq = 0;
 	let after: (() => void) | null = null;
+	let scrolledOnly = false;
 
 	const hideCard = (): void => {
 		if (hoverTimer >= 0) { clearTimeout(hoverTimer); }
@@ -414,7 +437,7 @@ export function EditorPane(props: {
 			if (carded()) { setCarded(false); }
 			return;
 		}
-		const cell = Math.max(0, cellIn(doc, frame[i], anchor) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[i], anchor, frameHints) - view.left);
 		const x = gutterWidth(doc.lineCount()) * grid.cellWidth + cell * grid.cellWidth;
 		setCardBox(placed(card, x, i * grid.rowHeight, grid.rowHeight, grid.cellWidth, areaWidth));
 		fill(cardRows, card.rows);
@@ -444,7 +467,9 @@ export function EditorPane(props: {
 		const x = e.locationX - gutterWidth(doc.lineCount()) * grid.cellWidth;
 		if (i >= (frame.length as int32) || x < 0) { return -1; }
 		const r = frame[i];
-		const at = doc.offsetAtCell(r.from, r.to, r.cell, view.left + (Math.floor(x / grid.cellWidth) as int32));
+		const shown = shownCellIn(doc, r, view.left + (Math.floor(x / grid.cellWidth) as int32), frameHints);
+		if (shown.hintAt >= 0) { return -1; }
+		const at = doc.offsetAtCell(r.from, r.to, r.cell, shown.text);
 		return at >= r.to ? -1 : at;
 	};
 
@@ -579,7 +604,7 @@ export function EditorPane(props: {
 		const total = actions.shown() ? offered.length as int32 : places.length as int32;
 		const selected = actions.shown() ? actions.selected : references.selected;
 		const columns = actions.shown() ? actionColumns(offered) : referenceColumns(doc, places);
-		const cell = actions.shown() ? Math.max(0, cellIn(doc, frame[row], head) - view.left) : 0;
+		const cell = actions.shown() ? Math.max(0, cellIn(doc, frame[row], head, frameHints) - view.left) : 0;
 		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
 		const place = menuPlaced(columns, Math.min(total, MENU_ROWS), x, row, view.rows, grid.rowHeight, grid.cellWidth, areaWidth, PANEL);
 		listTop = scrolledTop(listTop, selected, place.rows, total);
@@ -660,7 +685,7 @@ export function EditorPane(props: {
 			if (frame[k].holds(from)) { row = k; }
 		}
 		if (row < 0) { return; }
-		const cell = Math.max(0, cellIn(doc, frame[row], from) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[row], from, frameHints) - view.left);
 		const width = Math.min(areaWidth, RENAME_COLUMNS * grid.cellWidth);
 		const x = Math.max(0, Math.min((gutterWidth(doc.lineCount()) + cell) * grid.cellWidth, areaWidth - width));
 		setRenameBox({ x, y: (row + 1) * grid.rowHeight, width, height: 0, color: "" });
@@ -671,6 +696,9 @@ export function EditorPane(props: {
 	signChanged = (): void => {
 		if (grid.cellWidth > 0) { paint(); }
 	};
+	hintsChanged = (): void => {
+		if (grid.cellWidth > 0) { paint(); }
+	};
 	const menuCommands = new Set<string>(menuKeys.commands());
 	menuCommands.add("showCompletions");
 	const signatureCommands = new Set<string>(signKeysSeveral.commands());
@@ -678,6 +706,12 @@ export function EditorPane(props: {
 
 	const cx: Context = {
 		pageRows: (): int32 => Math.max(1, view.rows - 1),
+		scrollRows: (rows: int32): void => {
+			view = view.scrolledBy(rows, doc.lineCount(), rowsIn);
+			scrolledOnly = true;
+			hideCard();
+			signer.dismiss();
+		},
 		wrapWidth,
 		toggleWrap: (): void => {
 			wrap = !wrap;
@@ -779,6 +813,7 @@ export function EditorPane(props: {
 			references.close();
 			actions.toggle();
 		},
+		toggleInlayHints: (): void => { hints.toggle(); },
 		outline: (): void => {
 			completer.hide();
 			references.close();
@@ -801,6 +836,7 @@ export function EditorPane(props: {
 			setGoingTo(true);
 			paint();
 		},
+		expander: new Expander(syntax === null ? null : (syntax as Syntax).ancestors(doc)),
 	};
 
 	const layout = (e: NeonEvent): void => {
@@ -841,7 +877,8 @@ export function EditorPane(props: {
 			signer.moved(null);
 			occurrences.moved();
 		}
-		reveal();
+		if (scrolledOnly) { paint(); } else { reveal(); }
+		scrolledOnly = false;
 		if (after !== null) {
 			const then = after as () => void;
 			after = null;
@@ -908,7 +945,7 @@ export function EditorPane(props: {
 		}
 		const textX = gutterWidth(doc.lineCount()) * grid.cellWidth;
 		const cell = Math.round((Math.max(0, e.locationX) - textX) / grid.cellWidth) as int32;
-		return offsetIn(doc, frame[Math.min(i, (frame.length as int32) - 1)], view.left + Math.max(0, cell));
+		return offsetIn(doc, frame[Math.min(i, (frame.length as int32) - 1)], view.left + Math.max(0, cell), frameHints);
 	};
 
 	const pressed = (e: NeonEvent): void => {
@@ -948,7 +985,7 @@ export function EditorPane(props: {
 		const rows = dragScrollRows(e.locationY, areaHeight, grid.rowHeight);
 		if (rows != 0) {
 			view = view.nudged(rows, doc.lineCount(), rowsIn);
-			frame = framed(doc, view, wrapWidth());
+			frameUp();
 		}
 		drag(editor, gesture as Gesture, offsetAt(e));
 		signer.moved(null);
@@ -991,7 +1028,7 @@ export function EditorPane(props: {
 
 	const widest = (): int32 => {
 		let most = 0;
-		for (const r of frame) { most = Math.max(most, cellIn(doc, r, r.to)); }
+		for (const r of frame) { most = Math.max(most, rowCells(doc, r, frameHints)); }
 		return most;
 	};
 
