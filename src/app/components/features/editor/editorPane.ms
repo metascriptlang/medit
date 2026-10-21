@@ -4,7 +4,7 @@ import { Accessor, createSignal } from "../../../../../../neon/src/core/signal";
 import { List, createList } from "../../../../../../neon/src/core/list";
 import { ForList, Show } from "../../../../../../neon/src/macros/ui/flow";
 import { PixelRatio } from "../../../../../../neon/src/api/pixelRatio";
-import { TextInputHandle, View, ViewHandle } from "../../../../../../neon/src/components/primitives";
+import { TextInputHandle, TextSelection, View, ViewHandle } from "../../../../../../neon/src/components/primitives";
 import { Editor } from "../../../../model/editor";
 import { Sel, primaryRange, single, span } from "../../../../model/selection";
 import { LineTarget, lineTarget, targetLine, targetOffset } from "../../../../model/goto";
@@ -24,6 +24,7 @@ import { Completion, queryAt } from "../../../../model/completion";
 import { SignatureAsk, SignatureHelp, SignatureHelper, SignatureProvider } from "../../../../model/signatures";
 import { Formatter } from "../../../../model/format";
 import { Occurrence, Occurrences } from "../../../../model/occurrences";
+import { Renamer, Renaming } from "../../../../model/rename";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
 import { VisualRow, cellIn, offsetIn, rowIndexOf, rowsOf } from "../../../../view/wrap";
@@ -43,6 +44,7 @@ import { Preedit } from "../../content/preedit";
 import { FindBar } from "../find/findBar";
 import { createFinder } from "../find/finder";
 import { GoToBar } from "../goto/goToBar";
+import { RenameField } from "../rename/renameField";
 import { HoverCard, cardOf, cardSize, placed } from "../hover/hoverCard";
 import { CompletionMenu, MENU_BORDER, MENU_ROWS, menuColumns, menuPlaced, menuRows, scrolledTop } from "../completion/completionMenu";
 import { signatureCard, signaturePlaced } from "../signature/signatureCard";
@@ -56,6 +58,7 @@ const METASCRIPT = "metascript";
 const ASIDE_GAP: float64 = 4;
 const ASIDE_MIN_COLUMNS: int32 = 30;
 const ASIDE_MAX_COLUMNS: int32 = 60;
+const RENAME_COLUMNS: int32 = 30;
 
 function printable(text: string): boolean {
 	return text.length > 0 && text.charCodeAt(0) >= 32 && text.charCodeAt(0) != 127;
@@ -106,6 +109,13 @@ export function EditorPane(props: {
 	let refusal: string | null = null;
 	const [goingTo, setGoingTo] = createSignal<boolean>(false);
 	const [lineQuery, setLineQuery] = createSignal<string>("");
+	const [renamed, setRenamed] = createSignal<boolean>(false);
+	const [renameBox, setRenameBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const [renameName, setRenameName] = createSignal<string>("");
+	const [renameSelection, setRenameSelection] = createSignal<TextSelection>({ start: 0, end: 0 });
+	let renameText = "";
+	let placeRename: () => void = (): void => {};
+	let renameChanged: () => void = (): void => {};
 	let goingFrom: Viewport | null = null;
 	let goText = "";
 	let notice: string | null = null;
@@ -319,6 +329,7 @@ export function EditorPane(props: {
 		blink.restart();
 		placeMenu();
 		placeSignature();
+		placeRename();
 		report();
 	};
 
@@ -448,6 +459,51 @@ export function EditorPane(props: {
 		notice = message;
 		paint();
 	});
+	const renamer = new Renamer(editor, {
+		prepares: (): boolean => session !== null && (session as Session).prepares(),
+		prepare: (offset: int32, done: (range: [int32, int32] | null, error: string | null) => void): int32 =>
+			session === null ? -1 : (session as Session).prepareRename(offset, done),
+		rename: (offset: int32, name: string, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 =>
+			session === null ? -1 : (session as Session).rename(offset, name, (edits: Edit[] | null, others: int32, error: string | null): void => {
+				done(edits, others, error);
+				occurrences.moved();
+				paint();
+			}),
+		cancel: (id: int32): void => { if (session !== null) { (session as Session).cancel(id); } },
+	}, (message: string): void => {
+		notice = message;
+		paint();
+	}, (): void => { renameChanged(); });
+	renameChanged = (): void => {
+		const at = renamer.renaming();
+		if (at === null) {
+			if (renamed()) {
+				setRenamed(false);
+				focus();
+			}
+			return;
+		}
+		const r = at as Renaming;
+		renameText = r.old;
+		setRenameName(r.old);
+		setRenameSelection({ start: r.old.byteSlice(0, r.selectFrom).length, end: r.old.byteSlice(0, r.selectTo).length });
+		reveal();
+		setRenamed(true);
+	};
+	placeRename = (): void => {
+		const at = renamer.renaming();
+		if (at === null || grid.cellWidth <= 0) { return; }
+		const from = (at as Renaming).from;
+		let row = -1;
+		for (let k = 0; k < (frame.length as int32) && row < 0; k++) {
+			if (frame[k].holds(from)) { row = k; }
+		}
+		if (row < 0) { return; }
+		const cell = Math.max(0, cellIn(doc, frame[row], from) - view.left);
+		const width = Math.min(areaWidth, RENAME_COLUMNS * grid.cellWidth);
+		const x = Math.max(0, Math.min((gutterWidth(doc.lineCount()) + cell) * grid.cellWidth, areaWidth - width));
+		setRenameBox({ x, y: (row + 1) * grid.rowHeight, width, height: 0, color: "" });
+	};
 	occurrencesChanged = (): void => {
 		if (grid.cellWidth > 0) { paint(); }
 	};
@@ -539,6 +595,7 @@ export function EditorPane(props: {
 		cycleSignature: (forward: boolean): void => { signer.cycle(forward); },
 		hideSignatureHelp: (): void => { signer.dismiss(); },
 		format: (selections: boolean): void => { formatter.run(selections); },
+		rename: (): void => { renamer.start(); },
 		goToLine: (): void => {
 			goingFrom = view;
 			setGoingTo(true);
@@ -646,6 +703,7 @@ export function EditorPane(props: {
 
 	const pressed = (e: NeonEvent): void => {
 		hideCard();
+		if (renamed()) { renamer.cancel(); }
 		if (grid.cellWidth <= 0 || e.button != 1) { return; }
 		if (overMenu(e)) {
 			completer.pick(menuTop + (Math.floor((e.locationY - menuBox().y - MENU_BORDER) / grid.rowHeight) as int32));
@@ -819,6 +877,18 @@ export function EditorPane(props: {
 			changed={goChanged}
 			confirmed={goConfirmed}
 			cancelled={goCancelled}
+		/>
+		<RenameField
+			shown={renamed()}
+			box={renameBox()}
+			name={renameName()}
+			selection={renameSelection()}
+			changed={(text: string): void => {
+				renameText = text;
+				setRenameName(text);
+			}}
+			confirmed={(): void => { renamer.confirm(renameText); }}
+			cancelled={(): void => { renamer.cancel(); }}
 		/>
 		<View style={{ height: drawn().rowHeight, backgroundColor: PANEL }}>
 			<LineRow row={status()} cellWidth={drawn().cellWidth} rowHeight={drawn().rowHeight} />
