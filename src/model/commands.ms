@@ -50,6 +50,7 @@ export interface Context {
 	moveList: (move: MenuMove) => void;
 	confirmList: () => void;
 	hideList: () => void;
+	codeActions: () => void;
 	outline: () => void;
 	navigate: (back: boolean) => void;
 }
@@ -685,6 +686,7 @@ export function commands(): Map<string, Command> {
 	table.set("listLast", (e: Editor, cx: Context): void => { cx.moveList(MenuMove.Last); });
 	table.set("confirmList", (e: Editor, cx: Context): void => { cx.confirmList(); });
 	table.set("hideList", (e: Editor, cx: Context): void => { cx.hideList(); });
+	table.set("codeActions", (e: Editor, cx: Context): void => { cx.codeActions(); });
 	table.set("outline", (e: Editor, cx: Context): void => { cx.outline(); });
 	table.set("goBack", (e: Editor, cx: Context): void => { cx.navigate(true); });
 	table.set("goForward", (e: Editor, cx: Context): void => { cx.navigate(false); });
@@ -796,6 +798,7 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		moveList: (move: MenuMove): void => {},
 		confirmList: (): void => {},
 		hideList: (): void => {},
+		codeActions: (): void => {},
 		outline: (): void => {},
 		navigate: (back: boolean): void => {},
 	};
