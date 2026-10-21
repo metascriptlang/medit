@@ -1,11 +1,27 @@
 import { Anchor, Bias, Change, Document, Edit, mapOffset } from "./document";
-import { Sel, Selections, cursorAt, normalized, sameSelections, single, span } from "./selection";
+import {
+	Sel,
+	Selections,
+	cursorAt,
+	normalizedKeeping,
+	sameSelections,
+	single,
+	span,
+} from "./selection";
+
+const SELECTION_HISTORY: int32 = 1024;
 
 export struct Step {
 	id: int32;
 	edits: Edit[];
 	before: Selections;
 	after: Selections;
+}
+
+struct Placed {
+	selections: Selections;
+	oldest: int32;
+	version: int32;
 }
 
 struct Autoclosed {
@@ -24,6 +40,9 @@ export function mapThrough(offset: int32, changes: Span<Change>, bias: Bias): in
 export class Editor {
 	doc: Document;
 	selections: Selections = single(0);
+	private oldest: int32 = 0;
+	private placedBefore: Vec<Placed> = [];
+	private placedAfter: Vec<Placed> = [];
 	caseSensitive: boolean = false;
 	lineComment: string | null = null;
 	private autoclosed: Autoclosed[] = [];
@@ -33,6 +52,7 @@ export class Editor {
 	private depth: int32 = 0;
 	private pending: Edit[] = [];
 	private pendingBefore: Selections = single(0);
+	private placedAtBegin: Placed = { selections: single(0), oldest: 0, version: 0 };
 	private group: string = "";
 	private lastGroup: string = "";
 	private steps: int32 = 0;
@@ -50,8 +70,62 @@ export class Editor {
 				);
 			}
 		}
-		this.selections = next.normalized();
+		const follows = next.ranges.length >= this.selections.ranges.length ? this.oldest : 0;
+		const [kept, oldest] = next.normalizedKeeping(follows);
+		const was = this.placed();
+		this.selections = kept;
+		this.oldest = oldest;
 		this.keepAutoclosed();
+		if (this.depth == 0) { this.movedFrom(was); }
+	}
+
+	private movedFrom(was: Placed): void {
+		if (was.selections.sameSelections(this.selections)) { return; }
+		this.place(this.placedBefore, was);
+		this.placedAfter = [];
+	}
+
+	oldestRange(): Sel { return this.selections.ranges[this.oldest]; }
+
+	undoSelection(): boolean { return this.travelPlaces(this.placedBefore, this.placedAfter); }
+	redoSelection(): boolean { return this.travelPlaces(this.placedAfter, this.placedBefore); }
+
+	private placed(): Placed {
+		return { selections: this.selections, oldest: this.oldest, version: this.doc.version() };
+	}
+
+	private place(ref stack: Vec<Placed>, p: Placed): void {
+		const top = stack.length - 1;
+		if (top >= 0 && stack[top].version == p.version &&
+			stack[top].selections.sameSelections(p.selections)) {
+			return;
+		}
+		if ((stack.length as int32) == SELECTION_HISTORY) { stack.shift(); }
+		stack.push(p);
+	}
+
+	private travelPlaces(ref from: Vec<Placed>, ref into: Vec<Placed>): boolean {
+		if (this.depth > 0) { throw new Error("Editor.undoSelection: a transaction is open"); }
+		while (from.length > 0) {
+			const p = from.pop();
+			const ranges: Sel[] = [];
+			for (const s of p.selections.ranges) {
+				const anchor = this.doc.offsetSince(p.version, s.anchor, Bias.Left);
+				const head = this.doc.offsetSince(p.version, s.head, Bias.Left);
+				if (anchor === null || head === null) { break; }
+				ranges.push({ anchor: anchor as int32, head: head as int32, goal: s.goal });
+			}
+			if (ranges.length < p.selections.ranges.length) { continue; }
+			const mapped: Selections = { ranges, primary: p.selections.primary };
+			const [kept, oldest] = mapped.normalizedKeeping(p.oldest);
+			if (kept.sameSelections(this.selections)) { continue; }
+			this.place(into, this.placed());
+			this.selections = kept;
+			this.oldest = oldest;
+			this.keepAutoclosed();
+			return true;
+		}
+		return false;
 	}
 
 	rememberAutoclosed(inside: int32, open: string, close: string): void {
@@ -102,6 +176,7 @@ export class Editor {
 		if (this.depth == 0) {
 			this.pending = [];
 			this.pendingBefore = this.selections;
+			this.placedAtBegin = this.placed();
 			this.group = "";
 		}
 		this.depth += 1;
@@ -115,7 +190,9 @@ export class Editor {
 	end(): void {
 		if (this.depth == 0) { throw new Error("Editor.end: no transaction is open"); }
 		this.depth -= 1;
-		if (this.depth > 0 || this.pending.length == 0) { return; }
+		if (this.depth > 0) { return; }
+		this.movedFrom(this.placedAtBegin);
+		if (this.pending.length == 0) { return; }
 		const last = this.undos.length - 1;
 		if (this.group != "" && this.group == this.lastGroup && last >= 0 &&
 			this.undos[last].after.sameSelections(this.pendingBefore)) {
@@ -205,13 +282,16 @@ export class Editor {
 		if (this.depth > 0) { throw new Error(`Editor.${who}: a transaction is open`); }
 		if (from.length == 0) { return false; }
 		const step = from.pop();
+		const was = this.placed();
 		const inverses: Edit[] = [];
 		for (let i = step.edits.length - 1; i >= 0; i--) {
 			inverses.push(this.doc.splice(step.edits[i]));
 		}
 		into.push({ id: step.id, edits: inverses, before: step.after, after: step.before });
 		this.selections = step.before;
+		if (this.oldest >= (step.before.ranges.length as int32)) { this.oldest = 0; }
 		this.keepAutoclosed();
+		this.movedFrom(was);
 		this.lastGroup = "";
 		return true;
 	}
@@ -356,6 +436,43 @@ test "the editor is clean at the step it was saved at, through undo and redo" {
 	assert e.isDirty();
 	assert e.undo();
 	assert e.isDirty();
+}
+
+test "the oldest range keeps its age through added ranges, moves and merges" {
+	const e = editorWith("abcdefghij", [6]);
+	e.select({ ranges: [cursorAt(6), cursorAt(2)], primary: 1 });
+	e.select({ ranges: [cursorAt(2), cursorAt(6), cursorAt(9)], primary: 2 });
+	assert e.oldestRange().head == 6;
+	e.select({ ranges: [cursorAt(3), cursorAt(7), cursorAt(10)], primary: 2 });
+	assert e.oldestRange().head == 7;
+	e.select({ ranges: [span(3, 8), cursorAt(7), cursorAt(10)], primary: 2 });
+	assert e.oldestRange().anchor == 3 && e.oldestRange().head == 8;
+	e.select(single(0));
+	assert e.oldestRange().head == 0;
+}
+
+test "selection undo walks back through moves and edits, follows the text and leaves it alone" {
+	const e = editorWith("one two three", [0]);
+	e.select(single(4));
+	e.select({ ranges: [span(8, 13)], primary: 0 });
+	typed(e, "3");
+	assert e.doc.text() == "one two 3";
+	assert e.undoSelection();
+	assert e.selections.ranges[0].anchor == 8 && e.selections.ranges[0].head == 9;
+	assert e.undoSelection();
+	assert e.selections.ranges[0].head == 4;
+	assert e.doc.text() == "one two 3";
+	assert e.undoSelection();
+	assert e.selections.ranges[0].head == 0;
+	assert !e.undoSelection();
+	assert e.redoSelection();
+	assert e.redoSelection();
+	assert e.redoSelection();
+	assert e.selections.ranges[0].head == 9 && e.selections.ranges[0].anchor == 9;
+	assert !e.redoSelection();
+	assert e.undoSelection();
+	e.select(single(1));
+	assert !e.redoSelection();
 }
 
 test "edits at several places shift by what came before" {
