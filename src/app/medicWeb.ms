@@ -7,7 +7,10 @@ import { filePath } from "../lsp/uri";
 import { App, FileText, Platform } from "./app";
 import { EditorConfigFile } from "../model/editorconfig";
 import { SAMPLE } from "./sample";
-import { queryParam, requestFile, requestFiles } from "./lsp/socketWeb";
+import { Document } from "../model/document";
+import { Query } from "../model/find";
+import { ProjectResults, searchProject, withOpenFiles } from "../model/projectSearch";
+import { queryParam, requestFile, requestFiles, requestSearch } from "./lsp/socketWeb";
 import { socketLink } from "./lsp/socketLink";
 
 const FONT_PATH = "assets/JetBrainsMonoNL-Regular.ttf";
@@ -38,6 +41,12 @@ function sampleHost(lsp: string): Platform {
 			: { text: "", uri: "", error: `the web build has no file ${key}: start the bridge with --root` },
 		store: (key: string, text: string): string | null => `the web build has no file to save ${text.byteLength} bytes to`,
 		files: (): string[] => [],
+		search: (q: Query, openDoc: (key: string) => Document | null): ProjectResults => searchProject(
+			[SAMPLE_PATH],
+			openDoc,
+			(key: string): string | null => key == SAMPLE_PATH ? SAMPLE : null,
+			q,
+		),
 		editorConfigs: (key: string): EditorConfigFile[] => [],
 		keyOf: (shown: string): string => shown,
 		keyOfUri: (uri: string): string | null => uri == SAMPLE_URI ? SAMPLE_PATH : null,
@@ -93,6 +102,22 @@ function editorConfigsThrough(base: string, key: string): EditorConfigFile[] {
 	return found;
 }
 
+const NOTHING_FOUND: ProjectResults = { files: [], matches: 0, limitReached: false };
+
+function searchThrough(base: string, q: Query): ProjectResults {
+	const reply = requestSearch(base, q.text, q.caseSensitive, q.wholeWord);
+	if (reply.status != 200) {
+		console.log(`medic: searching through the bridge: ${reply.status} ${reply.text}`);
+		return NOTHING_FOUND;
+	}
+	const parsed = JSON.parse<ProjectResults>(reply.text);
+	if (!parsed.ok) {
+		console.log(`medic: the bridge sent search results as no JSON: ${parsed.error}`);
+		return NOTHING_FOUND;
+	}
+	return parsed.value;
+}
+
 function bridgeHost(lsp: string, base: string, rootUri: string): Platform {
 	const rootPath = filePath(rootUri) as string;
 	const dir = rootPath.endsWith("/") ? rootPath.byteSlice(0, rootPath.byteLength - 1) : rootPath;
@@ -113,6 +138,10 @@ function bridgeHost(lsp: string, base: string, rootUri: string): Platform {
 		files: (): string[] => {
 			const listing = listThrough(base);
 			return listing === null ? [] : (listing as Listing).files;
+		},
+		search: (q: Query, openDoc: (key: string) => Document | null): ProjectResults => {
+			const listing = listThrough(base);
+			return withOpenFiles(searchThrough(base, q), listing === null ? [] : (listing as Listing).files, openDoc, q);
 		},
 		editorConfigs: (key: string): EditorConfigFile[] => editorConfigsThrough(base, key),
 		keyOf: (shown: string): string => shown,

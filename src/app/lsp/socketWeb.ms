@@ -36,6 +36,12 @@ export function requestFiles(base: string): Reply {
 	return { status: bridgeStatus(), text };
 }
 
+export function requestSearch(base: string, text: string, caseSensitive: boolean, wholeWord: boolean): Reply {
+	const route = `/search?case=${caseSensitive ? 1 : 0}&word=${wholeWord ? 1 : 0}&q=`;
+	const found = bridgeRequest("GET", base, route, text, "".asBytes());
+	return { status: bridgeStatus(), text: found };
+}
+
 export function openSocket(url: string): boolean { return socketOpen(url) == 0; }
 
 export function socketBytes(): string { return socketTake(); }

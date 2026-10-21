@@ -23,6 +23,8 @@ import { Clip } from "../model/commands";
 import { MenuMove } from "../model/completer";
 import { Tabs } from "../model/tabs";
 import { QuickOpen } from "../model/quickOpen";
+import { Query } from "../model/find";
+import { Hit, ProjectResults } from "../model/projectSearch";
 import { Switcher, SWITCHER_DELAY_MS } from "../model/switcher";
 import { PaneHandle, Workspace } from "../model/workspace";
 import { single } from "../model/selection";
@@ -42,6 +44,7 @@ import { PICKER_PADDING, PICKER_ROWS, Picker } from "./components/ui/picker";
 import { LineRow, Row } from "./components/content/lineRow";
 import { quickOpenColumns, quickOpenRows, switcherRows } from "./components/features/quickOpen/quickOpenPicker";
 import { scrolledTop } from "./components/features/completion/completionMenu";
+import { SearchHandle, SearchPanel } from "./components/features/search/searchPanel";
 
 const HIGHLIGHT_LIMIT: int32 = 512 * 1024;
 const CLOSED_KEPT: int32 = 20;
@@ -58,6 +61,7 @@ export interface Platform {
 	read: (key: string) => FileText;
 	store: (key: string, text: string) => string | null;
 	files: () => string[];
+	search: (q: Query, openDoc: (key: string) => Document | null) => ProjectResults;
 	editorConfigs: (key: string) => EditorConfigFile[];
 	keyOf: (shown: string) => string;
 	keyOfUri: (uri: string) => string | null;
@@ -375,8 +379,30 @@ export function App(platform: Platform, first: string | null): NeonNode {
 		jumpTo(key, Math.min(doc.lineStart(l) + c, doc.lineEnd(l)));
 	};
 
+	let search: SearchHandle | null = null;
+
+	const openHit = (key: string, hit: Hit): void => {
+		const failed = goTo(key);
+		if (failed !== null) {
+			tell(failed as string);
+			return;
+		}
+		const doc = (items.get(key) as Item).editor.doc;
+		const line = Math.min(hit.line, doc.lineCount() - 1);
+		jumpTo(key, Math.min(doc.lineStart(line) + hit.from, doc.lineEnd(line)));
+	};
+
+	const openDoc = (key: string): Document | null => {
+		const item = items.get(key);
+		return item === undefined ? null : (item as Item).editor.doc;
+	};
+
 	const workspace: Workspace = {
 		quickOpen: showQuickOpen,
+		projectSearch: (): void => {
+			if (search !== null) { (search as SearchHandle).show(); }
+		},
+		stepSearch: (forward: boolean): boolean => search !== null && (search as SearchHandle).step(forward),
 		openAt: (uri: string, line: int32, character: int32): string | null => {
 			const key = platform.keyOfUri(uri);
 			if (key === null) { return `cannot open ${uri}`; }
@@ -443,6 +469,7 @@ export function App(platform: Platform, first: string | null): NeonNode {
 		match (chordOf(press)) {
 			"ctrl+p" | "ctrl+e" => { showQuickOpen(); }
 			"ctrl+shift+t" => { workspace.reopenClosed(); }
+			"ctrl+shift+f" => { workspace.projectSearch(); }
 			_ => {}
 		}
 	};
@@ -521,6 +548,15 @@ export function App(platform: Platform, first: string | null): NeonNode {
 					/>
 				</View>
 			</Show>
+			<SearchPanel
+				cellWidth={drawnCell()}
+				rowHeight={drawnRow()}
+				search={(q: Query): ProjectResults => platform.search(q, openDoc)}
+				shown={platform.shown}
+				open={openHit}
+				closed={focusActive}
+				handle={(h: SearchHandle): void => { search = h; }}
+			/>
 			<Picker
 				placeholder="file"
 				shown={opening()}

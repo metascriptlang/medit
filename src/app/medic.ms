@@ -9,6 +9,9 @@ import { Link } from "../lsp/session";
 import { filePath, fileUri } from "../lsp/uri";
 import { App, FileText, Platform } from "./app";
 import { EditorConfigFile } from "../model/editorconfig";
+import { Document } from "../model/document";
+import { Query } from "../model/find";
+import { ProjectResults, searchProject } from "../model/projectSearch";
 import { projectFiles } from "./files/projectFiles";
 import { processLink } from "./lsp/processLink";
 import { ownProcessId } from "./lsp/serverProcess";
@@ -85,6 +88,15 @@ function hostFor(root: string): Platform {
 		},
 		store,
 		files: (): string[] => projectFiles(root),
+		search: (q: Query, openDoc: (key: string) => Document | null): ProjectResults => searchProject(
+			projectFiles(root).map((shown: string): string => canonical(join(root, shown))),
+			openDoc,
+			(key: string): string | null => {
+				const text = readFile(key);
+				return text.ok ? text.value : null;
+			},
+			q,
+		),
 		editorConfigs,
 		keyOf: (shown: string): string => canonical(join(root, shown)),
 		keyOfUri: (uri: string): string | null => {
