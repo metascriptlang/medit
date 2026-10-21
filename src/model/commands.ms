@@ -51,6 +51,7 @@ export interface Context {
 	confirmReference: () => void;
 	hideReferences: () => void;
 	outline: () => void;
+	navigate: (back: boolean) => void;
 }
 
 export type Command = (e: Editor, cx: Context) => void;
@@ -685,6 +686,8 @@ export function commands(): Map<string, Command> {
 	table.set("confirmReference", (e: Editor, cx: Context): void => { cx.confirmReference(); });
 	table.set("hideReferences", (e: Editor, cx: Context): void => { cx.hideReferences(); });
 	table.set("outline", (e: Editor, cx: Context): void => { cx.outline(); });
+	table.set("goBack", (e: Editor, cx: Context): void => { cx.navigate(true); });
+	table.set("goForward", (e: Editor, cx: Context): void => { cx.navigate(false); });
 	table.set("paste", (e: Editor, cx: Context): void => {
 		cx.clip.read((text: string): void => { paste(e, text); });
 	});
@@ -794,6 +797,7 @@ function runner(saved: string[] = [], refusal: string | null = null): (e: Editor
 		confirmReference: (): void => {},
 		hideReferences: (): void => {},
 		outline: (): void => {},
+		navigate: (back: boolean): void => {},
 	};
 	return (e: Editor, name: string): void => {
 		const command = table.get(name);
