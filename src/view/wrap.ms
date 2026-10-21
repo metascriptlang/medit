@@ -2,6 +2,7 @@ import { Document } from "../model/document";
 import { cellsBetween, offsetAtCell, prevCluster } from "../model/motion";
 import { clusterCellsIn, nextClusterIn } from "../text/clusters";
 import { Tone } from "./tone";
+import { Severity } from "../model/diagnostics";
 
 const TAB: int32 = 9;
 const SPACE: int32 = 32;
@@ -10,6 +11,15 @@ const DELETE: int32 = 0x7F;
 export struct Piece {
 	text: string;
 	tone: Tone;
+	faded: boolean;
+	underline: Severity | null;
+}
+
+export struct Mark {
+	from: int32;
+	to: int32;
+	faded: boolean;
+	underline: Severity | null;
 }
 
 export struct VisualRow {
@@ -93,6 +103,20 @@ function toneAt(tones: Readonly<Span<Tone>>, index: int32): Tone {
 	return index >= 0 && index < (tones.length as int32) ? tones[index] : Tone.Plain;
 }
 
+function markAt(marks: Mark[], offset: int32): Mark {
+	let faded = false;
+	let underline: Severity | null = null;
+	for (const m of marks) {
+		if (m.from <= offset && offset < m.to) {
+			faded = faded || m.faded;
+			if (m.underline !== null && (underline === null || (m.underline as Severity) < (underline as Severity))) {
+				underline = m.underline;
+			}
+		}
+	}
+	return { from: offset, to: offset + 1, faded, underline };
+}
+
 export function rowPieces(
 	doc: Document,
 	r: VisualRow,
@@ -100,10 +124,13 @@ export function rowPieces(
 	cols: int32,
 	tones: Readonly<Span<Tone>>,
 	base: int32,
+	marks: Mark[],
 ): Vec<Piece> {
 	let pieces: Vec<Piece> = [];
 	let out: uint8[] = [];
 	let tone = Tone.Plain;
+	let faded = false;
+	let underline: Severity | null = null;
 	const text = doc.slice(r.from, r.to);
 	const bytes = text.asBytes();
 	const end = bytes.length as int32;
@@ -116,11 +143,16 @@ export function rowPieces(
 		const next = nextClusterIn(bytes, at);
 		if (cell + cells > first) {
 			const here = toneAt(tones, r.from + at - base);
-			if (here != tone && out.length > 0) {
-				pieces.push({ text: out.asString(), tone });
+			const mark = marks.length == 0 ? null : markAt(marks, r.from + at);
+			const dim = mark !== null && (mark as Mark).faded;
+			const line = mark === null ? null : (mark as Mark).underline;
+			if ((here != tone || dim != faded || line != underline) && out.length > 0) {
+				pieces.push({ text: out.asString(), tone, faded, underline });
 				out = [];
 			}
 			tone = here;
+			faded = dim;
+			underline = line;
 			const lead = bytes[at] as int32;
 			if (lead == TAB || cell < first || cell + cells > limit) {
 				out.pushSpaces(Math.min(cell + cells, limit) - Math.max(cell, first));
@@ -134,13 +166,13 @@ export function rowPieces(
 		cell += cells;
 		at = next;
 	}
-	if (out.length > 0 || pieces.length == 0) { pieces.push({ text: out.asString(), tone }); }
+	if (out.length > 0 || pieces.length == 0) { pieces.push({ text: out.asString(), tone, faded, underline }); }
 	return pieces;
 }
 
 export function rowText(doc: Document, r: VisualRow, left: int32, cols: int32): string {
 	let text = "";
-	for (const p of rowPieces(doc, r, left, cols, [], 0)) { text += p.text; }
+	for (const p of rowPieces(doc, r, left, cols, [], 0, [])) { text += p.text; }
 	return text;
 }
 
@@ -191,15 +223,21 @@ test "an offset at a soft break belongs to the row it starts" {
 	assert cellIn(d, rows[1], 10) == 2;
 }
 
-test "a row splits into pieces where the tone changes" {
+test "a row splits into pieces where the tone, the fade or the underline changes" {
 	const d = new Document("ab cd");
 	const rows = rowsOf(d, 0, 0);
 	const tones: Tone[] = [Tone.Keyword, Tone.Keyword, Tone.Plain, Tone.String, Tone.String];
-	const pieces = rowPieces(d, rows[0], 1, 10, tones.slice(1, 5), 1);
-	assert pieces.length == 3;
-	assert pieces[0].text == "b" && pieces[0].tone == Tone.Keyword;
-	assert pieces[1].text == " " && pieces[1].tone == Tone.Plain;
-	assert pieces[2].text == "cd" && pieces[2].tone == Tone.String;
+	const marks: Mark[] = [
+		{ from: 4, to: 5, faded: true, underline: null },
+		{ from: 2, to: 5, faded: false, underline: Severity.Hint },
+		{ from: 3, to: 4, faded: false, underline: Severity.Error },
+	];
+	const pieces = rowPieces(d, rows[0], 1, 10, tones.slice(1, 5), 1, marks);
+	assert pieces.length == 4;
+	assert pieces[0].text == "b" && pieces[0].tone == Tone.Keyword && pieces[0].underline === null;
+	assert pieces[1].text == " " && pieces[1].tone == Tone.Plain && pieces[1].underline == Severity.Hint;
+	assert pieces[2].text == "c" && pieces[2].tone == Tone.String && !pieces[2].faded && pieces[2].underline == Severity.Error;
+	assert pieces[3].text == "d" && pieces[3].faded && pieces[3].underline == Severity.Hint;
 }
 
 test "row text expands tabs, pads wide clusters and shows control characters" {
