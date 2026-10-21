@@ -1,5 +1,6 @@
 import { NeonNode } from "../../../neon/src/render/node";
 import { NeonEvent } from "../../../neon/src/render/event";
+import { useKeyboard, useSafeAreaInsets } from "../../../neon/src/render/environment";
 import { Accessor, createSignal } from "../../../neon/src/core/signal";
 import { List, createList } from "../../../neon/src/core/list";
 import { onSettled } from "../../../neon/src/core/effect";
@@ -474,7 +475,15 @@ export function App(platform: Platform, first: string | null): NeonNode {
 		}
 	};
 
-	return <Void style={{ backgroundColor: BACKGROUND, padding: PADDING }}>
+	const insets = useSafeAreaInsets();
+	const keyboard = useKeyboard();
+	return <Void style={{
+		backgroundColor: BACKGROUND,
+		paddingTop: PADDING + insets().top,
+		paddingRight: PADDING + insets().right,
+		paddingBottom: PADDING + Math.max(insets().bottom, keyboard().height),
+		paddingLeft: PADDING + insets().left,
+	}}>
 		<View
 			style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0 }}
 			ref={(handle: ViewHandle): void => { frame = handle; }}
