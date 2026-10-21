@@ -1,6 +1,7 @@
 import { Document } from "../model/document";
 import { Diagnostic, Diagnostics } from "../model/diagnostics";
 import { Completion } from "../model/completion";
+import { SignatureAsk, SignatureHelp } from "../model/signatures";
 import { Server, Span, Target } from "./server";
 
 export interface Link {
@@ -97,6 +98,15 @@ export class Session {
 	}
 
 	completionTriggers(): string[] { return this.server.triggers("completionProvider", "triggerCharacters"); }
+
+	signatureHelp(q: SignatureAsk, done: (help: SignatureHelp | null) => void): int32 {
+		return this.server.signatureHelp(this.doc, q, done);
+	}
+
+	signatureTriggers(): string[] {
+		return this.server.triggers("signatureHelpProvider", "triggerCharacters")
+			.concat(this.server.triggers("signatureHelpProvider", "retriggerCharacters"));
+	}
 
 	cancel(id: int32): void { this.server.cancel(id); }
 
