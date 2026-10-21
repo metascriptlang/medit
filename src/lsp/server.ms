@@ -4,6 +4,7 @@ import { Completion, snippetText, wordAround } from "../model/completion";
 import { Parameter, Signature, SignatureAsk, SignatureHelp } from "../model/signatures";
 import { Occurrence } from "../model/occurrences";
 import { OutlineItem } from "../model/outline";
+import { CodeAction } from "../model/actions";
 import { refined } from "../model/patch";
 import { Client, NotificationHandler, Reply, failed, quoted } from "./client";
 import { DocumentSync, SyncKind } from "./sync";
@@ -27,9 +28,12 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"signatureHelp\":{\"signatureInformation\":{\"documentationFormat\":[\"markdown\",\"plaintext\"],"
 	+ "\"parameterInformation\":{\"labelOffsetSupport\":true},\"activeParameterSupport\":true},\"contextSupport\":true},"
 	+ "\"formatting\":{},\"rangeFormatting\":{},\"documentHighlight\":{},\"rename\":{\"prepareSupport\":true},"
-	+ "\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true}"
+	+ "\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true},"
+	+ "\"codeAction\":{\"codeActionLiteralSupport\":{\"codeActionKind\":{\"valueSet\":[\"\",\"quickfix\",\"refactor\","
+	+ "\"refactor.extract\",\"refactor.inline\",\"refactor.rewrite\",\"source\",\"source.organizeImports\",\"source.fixAll\"]}},"
+	+ "\"isPreferredSupport\":true,\"dataSupport\":true,\"resolveSupport\":{\"properties\":[\"edit\"]}}"
 	+ "},"
-	+ "\"workspace\":{\"configuration\":true},"
+	+ "\"workspace\":{\"configuration\":true,\"applyEdit\":true,\"executeCommand\":{}},"
 	+ "\"window\":{\"workDoneProgress\":false,\"showMessage\":{}}"
 	+ "}";
 
@@ -350,6 +354,7 @@ export class Server {
 				message: d.getDynamicField("message").asString(),
 				source: d.getDynamicField("source").asString(),
 				unnecessary: tagged(d.getDynamicField("tags"), UNNECESSARY),
+				raw: stringify(d),
 			});
 		}
 		return out;
@@ -606,26 +611,127 @@ export class Server {
 		if (!this.provides("renameProvider")) { return -1; }
 		const params = withField(this.at(doc, offset), "newName", quoted(name));
 		return this.request(doc, "textDocument/rename", params, (result: JsonValue, version: int32): void => {
-			if (present(result.getDynamicField("documentChanges"))) {
-				done(null, 0, "the answer edits through documentChanges, which medic does not ask for");
-				return;
-			}
-			const uri = (this.sync as DocumentSync).uri;
-			const changes = result.getDynamicField("changes");
-			let mine: JsonValue = jsonNull();
-			let others = 0;
-			const keys: string[] = match (changes.kind) {
-				JsonKind.Object => changes.keys,
-				_ => [],
-			};
-			for (const key of keys) {
-				if (key == uri) { mine = changes.getDynamicField(key); }
-				else if (changes.getDynamicField(key).length() > 0) { others += 1; }
-			}
-			const edits = this.edits(doc, version, mine);
-			if (edits === null) { done(null, 0, "the answer names text no longer kept"); }
-			else { done(edits as Edit[], others, null); }
+			this.workspaceEdit(doc, version, result, done);
 		}, (message: string): void => { done(null, 0, message); });
+	}
+
+	// A workspace edit's edits to this document, and how many other documents it changes.
+	private workspaceEdit(doc: Document, version: int32, edit: JsonValue, done: (edits: Edit[] | null, others: int32, error: string | null) => void): void {
+		if (present(edit.getDynamicField("documentChanges"))) {
+			done(null, 0, "the answer edits through documentChanges, which medic does not ask for");
+			return;
+		}
+		const uri = (this.sync as DocumentSync).uri;
+		const changes = edit.getDynamicField("changes");
+		let mine: JsonValue = jsonNull();
+		let others = 0;
+		const keys: string[] = match (changes.kind) {
+			JsonKind.Object => changes.keys,
+			_ => [],
+		};
+		for (const key of keys) {
+			if (key == uri) { mine = changes.getDynamicField(key); }
+			else if (changes.getDynamicField(key).length() > 0) { others += 1; }
+		}
+		const edits = this.edits(doc, version, mine);
+		if (edits === null) { done(null, 0, "the answer names text no longer kept"); }
+		else { done(edits as Edit[], others, null); }
+	}
+
+	// A diagnostic as the server sent it, its range as the document is now.
+	private diagnosticText(doc: Document, d: Diagnostic): string {
+		const r: Range = { start: doc.positionOf(d.from), end: doc.positionOf(d.to) };
+		let text = `{"range":${JSON.stringify<Range>(r)}`;
+		const parsed = JSON.parseValue(d.raw);
+		const sent: JsonValue = parsed.ok ? parsed.value : jsonNull();
+		const keys: string[] = match (sent.kind) {
+			JsonKind.Object => sent.keys,
+			_ => [],
+		};
+		for (const key of keys) {
+			if (key != "range") { text += `,${quoted(key)}:${stringify(sent.getDynamicField(key))}`; }
+		}
+		if (keys.length == 0) { text += `,"severity":${d.severity as int32},"message":${quoted(d.message)}`; }
+		return text + "}";
+	}
+
+	// The actions offered for a range, with the diagnostics over it as the context.
+	codeActions(doc: Document, from: int32, to: int32, diagnostics: Diagnostic[], done: (found: CodeAction[] | null) => void): int32 {
+		if (!this.provides("codeActionProvider")) { return -1; }
+		const r: Range = { start: doc.positionOf(from), end: doc.positionOf(to) };
+		const context = diagnostics.map((d: Diagnostic): string => this.diagnosticText(doc, d)).join(",");
+		const params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"range":${JSON.stringify<Range>(r)},`
+			+ `"context":{"diagnostics":[${context}],"triggerKind":${INVOKED}}}`;
+		return this.request(doc, "textDocument/codeAction", params, (result: JsonValue, version: int32): void => {
+			const found: CodeAction[] = [];
+			for (let i = 0; i < result.length(); i++) {
+				const a = result.at(i);
+				if (present(a.getDynamicField("disabled"))) { continue; }
+				const command = isKind(a.getDynamicField("command"), JsonKind.String);
+				found.push({
+					title: a.getDynamicField("title").asString().split("\n").join(""),
+					kind: command ? "" : a.getDynamicField("kind").asString(),
+					preferred: !command && a.getDynamicField("isPreferred").asBoolean(false),
+					raw: stringify(a),
+				});
+			}
+			done(found);
+		}, (message: string): void => { done(null); });
+	}
+
+	// Applies an action: resolves its edit when the server leaves that for later, then gives its
+	// edit, or else runs its command, whose edits come back through workspace/applyEdit.
+	applyAction(doc: Document, action: CodeAction, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
+		if (this.state != State.Ready || this.sync === null) { return -1; }
+		const parsed = JSON.parseValue(action.raw);
+		if (!parsed.ok) { return -1; }
+		const a = parsed.value;
+		const resolvable = this.capabilities.getDynamicField("codeActionProvider").getDynamicField("resolveProvider").asBoolean(false);
+		const bare = isKind(a.getDynamicField("command"), JsonKind.String);
+		if (!bare && resolvable && present(a.getDynamicField("data")) && !present(a.getDynamicField("edit"))) {
+			return this.request(doc, "codeAction/resolve", action.raw, (result: JsonValue, version: int32): void => {
+				this.applied(doc, version, result, done);
+			}, (message: string): void => { done(null, 0, message); });
+		}
+		this.changed(doc);
+		return this.applied(doc, (this.sync as DocumentSync).lspVersion(), a, done);
+	}
+
+	private applied(doc: Document, version: int32, a: JsonValue, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
+		const edit = a.getDynamicField("edit");
+		if (present(edit.getDynamicField("changes")) || present(edit.getDynamicField("documentChanges"))) {
+			this.workspaceEdit(doc, version, edit, done);
+			return 0;
+		}
+		const command = isKind(a.getDynamicField("command"), JsonKind.String) ? a : a.getDynamicField("command");
+		if (!present(command)) {
+			done([], 0, null);
+			return 0;
+		}
+		const name = command.getDynamicField("command").asString();
+		if (!this.triggers("executeCommandProvider", "commands").includes(name)) {
+			done(null, 0, `the server does not list the command ${name}`);
+			return 0;
+		}
+		const args = command.getDynamicField("arguments");
+		const params = `{"command":${quoted(name)},"arguments":${present(args) ? stringify(args) : "[]"}}`;
+		return this.request(doc, "workspace/executeCommand", params, (result: JsonValue, version: int32): void => {
+			done([], 0, null);
+		}, (message: string): void => { done(null, 0, message); });
+	}
+
+	// Answers the server's own requests to edit: `apply` gets the edits to this document and
+	// how many others they change, and gives back why it did not apply them, or null.
+	applyEdits(doc: Document, apply: (edits: Edit[], others: int32) => string | null): void {
+		this.client.answer("workspace/applyEdit", (params: JsonValue): string => {
+			let failure: string | null = "no document is open";
+			if (this.sync !== null) {
+				this.workspaceEdit(doc, (this.sync as DocumentSync).lspVersion(), params.getDynamicField("edit"), (edits: Edit[] | null, others: int32, error: string | null): void => {
+					failure = error !== null ? error : apply(edits as Edit[], others);
+				});
+			}
+			return failure === null ? "{\"applied\":true}" : `{"applied":false,"failureReason":${quoted(failure as string)}}`;
+		});
 	}
 
 	hover(doc: Document, offset: int32, done: (text: string, over: Span | null) => void): int32 {
@@ -796,7 +902,8 @@ when (testBuild) {
 		server.initialize(null, 1, (e: string | null): void => {});
 		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true},"
 			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"documentFormattingProvider\":true,\"documentHighlightProvider\":true,"
-			+ "\"renameProvider\":{\"prepareProvider\":true},\"referencesProvider\":true,\"documentSymbolProvider\":true}}"));
+			+ "\"renameProvider\":{\"prepareProvider\":true},\"referencesProvider\":true,\"documentSymbolProvider\":true,"
+			+ "\"codeActionProvider\":{\"resolveProvider\":true},\"executeCommandProvider\":{\"commands\":[\"fix.all\"]}}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		return [server, wire, d];
 	}
@@ -1004,5 +1111,54 @@ when (testBuild) {
 		const nid = server.documentSymbols(d, (s: OutlineItem[] | null): void => { found = s; });
 		server.receive(reply(nid, "null"));
 		assert found !== null && (found as OutlineItem[]).length == 0;
+	}
+
+	test "code actions carry the diagnostics over the range, and apply by their edit, by resolving it, or by a command" {
+		const [server, wire, d] = completing("let  x = 1;\n");
+		const warned: Diagnostic = {
+			from: 4, to: 5, severity: Severity.Warning, message: "spaces", source: "fmt", unnecessary: false,
+			raw: "{\"range\":{\"start\":{\"line\":0,\"character\":3},\"end\":{\"line\":0,\"character\":4}},\"code\":7,\"message\":\"spaces\"}",
+		};
+		let found: CodeAction[] | null = null;
+		const id = server.codeActions(d, 0, 4, [warned], (a: CodeAction[] | null): void => { found = a; });
+		const asked = wire.sent[wire.sent.length - 1];
+		assert asked.includes("\"method\":\"textDocument/codeAction\"") && asked.includes("\"triggerKind\":1");
+		assert asked.includes("\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":4},\"end\":{\"line\":0,\"character\":5}},\"code\":7,\"message\":\"spaces\"}]");
+		const here = "\"file:///a.ms\":[{\"range\":{\"start\":{\"line\":0,\"character\":3},\"end\":{\"line\":0,\"character\":5}},\"newText\":\" \"}]";
+		server.receive(reply(id, `[{"title":"Fix:\\nline","kind":"quickfix","isPreferred":true,"edit":{"changes":{${here}}}},`
+			+ "{\"title\":\"Later\",\"kind\":\"refactor\",\"data\":1},{\"title\":\"All\",\"command\":\"fix.all\",\"arguments\":[1]},"
+			+ "{\"title\":\"Other\",\"command\":{\"title\":\"Other\",\"command\":\"other\"}},{\"title\":\"Off\",\"disabled\":{\"reason\":\"no\"}}]"));
+		const f = found as CodeAction[];
+		assert f.length == 4 && f[0].title == "Fix:line" && f[0].kind == "quickfix" && f[0].preferred && f[2].kind == "" && !f[2].preferred;
+		let edits: Edit[] | null = null;
+		let others: int32 = -1;
+		const errors: Array<string | null> = [];
+		const keep = (e: Edit[] | null, o: int32, x: string | null): void => {
+			edits = e;
+			others = o;
+			errors.push(x);
+		};
+		const rid = server.applyAction(d, f[1], keep);
+		const resolving = wire.sent[wire.sent.length - 1];
+		assert resolving.includes("\"method\":\"codeAction/resolve\"") && resolving.includes("\"data\":1");
+		server.receive(reply(rid, `{"title":"Later","edit":{"changes":{${here},"file:///b.ms":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"x"}]}}}`));
+		assert edits !== null && (edits as Edit[]).length == 1 && others == 1 && errors[0] === null;
+		const _u = server.applyAction(d, f[3], keep);
+		assert edits === null && errors[1] == "the server does not list the command other";
+		let asked2: Edit[] = [];
+		server.applyEdits(d, (e: Edit[], o: int32): string | null => {
+			asked2 = e;
+			return null;
+		});
+		const cid = server.applyAction(d, f[2], keep);
+		assert wire.sent[wire.sent.length - 1].includes("\"command\":\"fix.all\",\"arguments\":[1]");
+		server.receive(framed("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"workspace/applyEdit\",\"params\":{\"edit\":{\"changes\":{"
+			+ "\"file:///a.ms\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":3}},\"newText\":\"var\"}]}}}}"));
+		assert asked2.length == 1 && asked2[0].text == "var" && wire.sent[wire.sent.length - 1].includes("\"id\":40,\"result\":{\"applied\":true}");
+		server.receive(reply(cid, "null"));
+		assert edits !== null && (edits as Edit[]).length == 0 && errors[2] === null;
+		const _a = server.applyAction(d, f[0], keep);
+		const _s = d.splice((edits as Edit[])[0]);
+		assert d.text() == "let x = 1;\n";
 	}
 }

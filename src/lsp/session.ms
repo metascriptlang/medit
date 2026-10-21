@@ -5,6 +5,7 @@ import { SignatureAsk, SignatureHelp } from "../model/signatures";
 import { Occurrence } from "../model/occurrences";
 import { Place } from "../model/references";
 import { OutlineItem } from "../model/outline";
+import { CodeAction } from "../model/actions";
 import { Server, Span, Target } from "./server";
 
 export interface Link {
@@ -23,6 +24,7 @@ export class Session {
 	private doc: Document;
 	private note: string = "";
 	private watchers: Array<() => void> = [];
+	private editing: (edits: Edit[], others: int32) => string | null = (edits: Edit[], others: int32): string | null => "nothing applies edits yet";
 
 	constructor(link: Link, name: string, doc: Document, uri: string, languageId: string, rootUri: string | null, processId: int32 | null) {
 		this.link = link;
@@ -40,6 +42,7 @@ export class Session {
 			this.diagnostics.replace(doc, found as Diagnostic[]);
 			this.changed();
 		});
+		this.server.applyEdits(doc, (edits: Edit[], others: int32): string | null => this.editing(edits, others));
 		this.server.on("window/showMessage", (params: JsonValue): void => {
 			this.told(`${name}: ${params.getDynamicField("message").asString()}`);
 		});
@@ -140,6 +143,17 @@ export class Session {
 	documentSymbols(done: (found: OutlineItem[] | null) => void): int32 {
 		return this.server.documentSymbols(this.doc, done);
 	}
+
+	codeActions(from: int32, to: int32, done: (found: CodeAction[] | null) => void): int32 {
+		return this.server.codeActions(this.doc, from, to, this.diagnostics.within(this.doc, from, to), done);
+	}
+
+	applyAction(action: CodeAction, done: (edits: Edit[] | null, others: int32, error: string | null) => void): int32 {
+		return this.server.applyAction(this.doc, action, done);
+	}
+
+	// Who applies the edits the server asks for on its own, as after a code action's command.
+	applying(handler: (edits: Edit[], others: int32) => string | null): void { this.editing = handler; }
 
 	prepares(): boolean { return this.server.prepares(); }
 

@@ -137,7 +137,7 @@ export function HoverCard(props: {
 }
 
 test "a card stacks diagnostics over the hover text, and sits above its row unless there is no room" {
-	const d: Diagnostic = { from: 0, to: 1, severity: Severity.Error, message: "bad", source: "", unnecessary: false };
+	const d: Diagnostic = { from: 0, to: 1, severity: Severity.Error, message: "bad", source: "", unnecessary: false, raw: "" };
 	const plain = (source: string, language: string): Tone[] | null => null;
 	const card = cardOf([d], "```ms\nlet x: int32\n```", 40, plain);
 	assert card.rows.length == 3;

@@ -15,6 +15,7 @@ export struct Diagnostic {
 	message: string;
 	source: string;
 	unnecessary: boolean;
+	raw: string;
 }
 
 struct Held {
@@ -24,6 +25,7 @@ struct Held {
 	message: string;
 	source: string;
 	unnecessary: boolean;
+	raw: string;
 }
 
 function widened(doc: Document, from: int32, to: int32): [int32, int32] {
@@ -66,6 +68,7 @@ export class Diagnostics {
 				message: d.message,
 				source: d.source,
 				unnecessary: d.unnecessary,
+				raw: d.raw,
 			});
 		}
 	}
@@ -81,6 +84,7 @@ export class Diagnostics {
 			message: h.message,
 			source: h.source,
 			unnecessary: h.unnecessary,
+			raw: h.raw,
 		};
 	}
 
@@ -179,7 +183,7 @@ test "replacing the set releases the old anchors" {
 }
 
 function hint(from: int32, to: int32, message: string): Diagnostic {
-	return { from, to, severity: Severity.Hint, message, source: "", unnecessary: false };
+	return { from, to, severity: Severity.Hint, message, source: "", unnecessary: false, raw: "" };
 }
 
 test "next lands on the diagnostic under the cursor, then steps on, wrapping at the ends" {
