@@ -2,12 +2,14 @@ import { NeonNode } from "../../../neon/src/render/node";
 import { runWindow, DesktopOptions, desktopOptions } from "../../../neon/src/platform/ion/window";
 import { Clipboard } from "../../../neon/src/api/clipboard";
 import { argv, cwd, exit } from "std/process";
-import { exists, readFile, rename, writeFile } from "std/fs";
-import { dirname, join, resolve } from "std/fs/path";
+import { exists, isDir, readFile, rename, writeFile } from "std/fs";
+import { dirname, join, normalize, resolve } from "std/fs/path";
 import { Clip } from "../model/commands";
 import { Link } from "../lsp/session";
-import { fileUri } from "../lsp/uri";
-import { App, Connect } from "./app";
+import { filePath, fileUri } from "../lsp/uri";
+import { App, FileText, Platform } from "./app";
+import { EditorConfigFile } from "../model/editorconfig";
+import { projectFiles } from "./files/projectFiles";
 import { processLink } from "./lsp/processLink";
 import { ownProcessId } from "./lsp/serverProcess";
 
@@ -32,15 +34,18 @@ const systemClip: Clip = {
 	},
 };
 
-function storeTo(path: string): (text: string) => string | null {
-	return (text: string): string | null => {
-		const temp = `${path}.medic-save`;
-		const wrote = writeFile(temp, text);
-		if (!wrote.ok) { return `cannot save: ${wrote.error.toString()}`; }
-		const moved = rename(temp, path);
-		if (!moved.ok) { return `saved to ${temp}, but cannot replace the file: ${moved.error.toString()}`; }
-		return null;
-	};
+function store(path: string, text: string): string | null {
+	const temp = `${path}.medic-save`;
+	const wrote = writeFile(temp, text);
+	if (!wrote.ok) { return `cannot save: ${wrote.error.toString()}`; }
+	const moved = rename(temp, path);
+	if (!moved.ok) { return `saved to ${temp}, but cannot replace the file: ${moved.error.toString()}`; }
+	return null;
+}
+
+function canonical(path: string): string {
+	const full = normalize(resolve(path, cwd()));
+	return full.byteLength >= 2 && full.byteAt(1) == ":".code ? full.byteSlice(0, 1).toUpperCase() + full.byteSlice(1, full.byteLength) : full;
 }
 
 function projectRoot(file: string): string {
@@ -53,12 +58,41 @@ function projectRoot(file: string): string {
 	return dir;
 }
 
-function connectFor(path: string): Connect {
-	const file = resolve(path, cwd());
-	const root = projectRoot(file);
+function editorConfigs(path: string): EditorConfigFile[] {
+	const found: EditorConfigFile[] = [];
+	let dir = dirname(path);
+	while (true) {
+		const text = readFile(join(dir, ".editorconfig"));
+		if (text.ok) { found.push({ dir, text: text.value }); }
+		const up = dirname(dir);
+		if (up == dir) {
+			found.reverse();
+			return found;
+		}
+		dir = up;
+	}
+}
+
+function hostFor(root: string): Platform {
+	const under = root.endsWith("/") ? root : `${root}/`;
 	return {
+		clip: systemClip,
+		fail,
+		read: (key: string): FileText => {
+			const text = readFile(key);
+			return text.ok ? { text: text.value, uri: fileUri(key), error: null }
+				: { text: "", uri: "", error: `cannot read ${key}: ${text.error.toString()}` };
+		},
+		store,
+		files: (): string[] => projectFiles(root),
+		editorConfigs,
+		keyOf: (shown: string): string => canonical(join(root, shown)),
+		keyOfUri: (uri: string): string | null => {
+			const path = filePath(uri);
+			return path === null ? null : canonical(path as string);
+		},
+		shown: (key: string): string => key.startsWith(under) ? key.byteSlice(under.byteLength, key.byteLength) : key,
 		link: (command: string): Link | null => processLink(command, root),
-		uri: fileUri(file),
 		rootUri: fileUri(root),
 		processId: ownProcessId(),
 	};
@@ -66,20 +100,21 @@ function connectFor(path: string): Connect {
 
 function main(): int32 {
 	if (argv.length < 2) {
-		console.log("usage: medic <file>");
+		console.log("usage: medic <file or folder>");
 		return 2;
 	}
 	const path = argv[argv.length - 1];
-	const text = readFile(path);
-	if (!text.ok) {
-		console.log(`medic: cannot read ${path}: ${text.error.toString()}`);
+	if (!exists(path)) {
+		console.log(`medic: no file or folder at ${path}`);
 		return 1;
 	}
-	const contents = text.value;
+	const target = canonical(path);
+	const folder = isDir(target);
+	const root = folder ? target : canonical(projectRoot(target));
 	// Parked: the title shows no unsaved marker until neon lets an app set its window title,
 	// ~/metascript/.inbox/neon/2026-10-16-haro-window-title-from-an-app.md
 	const opts: DesktopOptions = { ...desktopOptions(`medic ${path}`, 960, 640), font: FONT_PATH };
-	return runWindow(opts, (): NeonNode => App(contents, path, systemClip, storeTo(path), fail, connectFor(path))) as int32;
+	return runWindow(opts, (): NeonNode => App(hostFor(root), folder ? null : target)) as int32;
 }
 
 exit(main());
