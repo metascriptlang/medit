@@ -2,6 +2,7 @@
 //   node scripts/webDrive.mjs <url> <outDir> <step>...
 // Steps: wait:<ms>  shot:<name>  wheel:<deltaY>  hwheel:<deltaX>  key:[ctrl+][alt+][shift+]<key>[*n]  type:<text> (keypresses)  text:<text> (insertText)
 //        compose:<text>  commit:<text>  click:<x>,<y>[,<count>][,alt|shift]  drag:<x1>,<y1>,<x2>,<y2>[,<moves>]
+//        move:<x>,<y> (no button held)
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,6 +58,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const VK = {
 	ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Backspace: 8, Tab: 9, Escape: 27,
 	Home: 36, End: 35, Delete: 46, PageUp: 33, PageDown: 34, Insert: 45,
+	F1: 112, F2: 113, F3: 114, F4: 115, F5: 116, F6: 117, F7: 118, F8: 119, F9: 120, F10: 121, F11: 122, F12: 123,
 };
 const PUNCTUATION = { "/": ["Slash", 191], ".": ["Period", 190], ",": ["Comma", 188], "[": ["BracketLeft", 219], "]": ["BracketRight", 221] };
 const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
@@ -115,6 +117,10 @@ for (const step of steps) {
 			await mouse("mouseReleased", Number(x), Number(y), modifiers, c);
 		}
 		await sleep(100);
+	} else if (kind === "move") {
+		const [x, y] = arg.split(",").map(Number);
+		await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+		await sleep(50);
 	} else if (kind === "drag") {
 		const [x1, y1, x2, y2, moves = 2] = arg.split(",").map(Number);
 		await mouse("mousePressed", x1, y1, 0, 1);
