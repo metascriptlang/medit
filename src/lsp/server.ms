@@ -2,10 +2,13 @@ import { Document, Edit, Bias } from "../model/document";
 import { Diagnostic, Severity } from "../model/diagnostics";
 import { Completion, snippetText, wordAround } from "../model/completion";
 import { Parameter, Signature, SignatureAsk, SignatureHelp } from "../model/signatures";
+import { Occurrence } from "../model/occurrences";
+import { refined } from "../model/patch";
 import { Client, NotificationHandler, Reply, failed, quoted } from "./client";
 import { DocumentSync, SyncKind } from "./sync";
 import { Position, Range, byteColumn, positionOf } from "./position";
 import { isKind } from "./json";
+import { TAB_SIZE } from "../text/clusters";
 
 const CLIENT_CAPABILITIES = "{"
 	+ "\"general\":{\"positionEncodings\":[\"utf-16\"]},"
@@ -21,13 +24,16 @@ const CLIENT_CAPABILITIES = "{"
 	+ "\"contextSupport\":true,"
 	+ "\"completionList\":{\"itemDefaults\":[\"editRange\",\"insertTextFormat\",\"data\"]}},"
 	+ "\"signatureHelp\":{\"signatureInformation\":{\"documentationFormat\":[\"markdown\",\"plaintext\"],"
-	+ "\"parameterInformation\":{\"labelOffsetSupport\":true},\"activeParameterSupport\":true},\"contextSupport\":true}"
+	+ "\"parameterInformation\":{\"labelOffsetSupport\":true},\"activeParameterSupport\":true},\"contextSupport\":true},"
+	+ "\"formatting\":{},\"rangeFormatting\":{},\"documentHighlight\":{}"
 	+ "},"
 	+ "\"workspace\":{\"configuration\":true},"
 	+ "\"window\":{\"workDoneProgress\":false,\"showMessage\":{}}"
 	+ "}";
 
 const FENCE = "```";
+const FORMATTING_OPTIONS = `{"tabSize":${TAB_SIZE},"insertSpaces":false,"trimTrailingWhitespace":true,`
+	+ `"insertFinalNewline":true,"trimFinalNewlines":true}`;
 
 export enum State {
 	Starting,
@@ -107,6 +113,7 @@ export function locationsOf(result: JsonValue): Location[] {
 }
 
 const UNNECESSARY: int32 = 1;
+const WRITE_HIGHLIGHT: int32 = 3;
 const DEPRECATED: int32 = 1;
 const SNIPPET: int32 = 2;
 const INVOKED: int32 = 1;
@@ -341,20 +348,20 @@ export class Server {
 		return JSON.stringify<PositionParams>(params);
 	}
 
-	private request(doc: Document, method: string, params: string, done: (result: JsonValue, version: int32) => void, refused: () => void): int32 {
+	private request(doc: Document, method: string, params: string, done: (result: JsonValue, version: int32) => void, refused: (message: string) => void): int32 {
 		if (this.state != State.Ready || this.sync === null) { return -1; }
 		this.changed(doc);
 		const sync = this.sync as DocumentSync;
 		const version = sync.lspVersion();
 		return this.client.request(method, params, (r: Reply): void => {
-			if (r.failed()) { refused(); }
+			if (r.failed()) { refused(r.message); }
 			else { done(r.result, version); }
 		});
 	}
 
 	private ask(doc: Document, method: string, offset: int32, done: (result: JsonValue, version: int32) => void): int32 {
 		if (this.state != State.Ready || this.sync === null) { return -1; }
-		return this.request(doc, method, this.at(doc, offset), done, (): void => {});
+		return this.request(doc, method, this.at(doc, offset), done, (message: string): void => {});
 	}
 
 	private span(doc: Document, version: int32, range: Range, first: Bias = Bias.Right, last: Bias = Bias.Left): Span | null {
@@ -372,9 +379,9 @@ export class Server {
 			const e = list.at(i);
 			const s = this.span(doc, version, rangeOf(e.getDynamicField("range")), Bias.Left, Bias.Right);
 			if (s === null) { return null; }
-			out.push({ from: (s as Span).from, to: (s as Span).to, text: e.getDynamicField("newText").asString() });
+			out.push({ from: (s as Span).from, to: (s as Span).to, text: e.getDynamicField("newText").asString().split("\r\n").join("\n") });
 		}
-		return out;
+		return refined(doc, out);
 	}
 
 	// One completion item, its offsets as the document is now; null when a range of it names
@@ -468,7 +475,7 @@ export class Server {
 				else { items.push({ ...(c as Completion), resolved: !resolvable }); }
 			}
 			done(items, incomplete);
-		}, (): void => { done([], false); });
+		}, (message: string): void => { done([], false); });
 	}
 
 	// Fills in what the server left out of a completion until it was chosen or shown. `done`
@@ -487,7 +494,7 @@ export class Server {
 				extra: extra === null ? item.extra : extra as Edit[],
 				extraAt: extra === null ? item.extraAt : doc.version(),
 			});
-		}, (): void => { done(settled); });
+		}, (message: string): void => { done(settled); });
 		if (id < 0) { done(settled); }
 		return id;
 	}
@@ -513,10 +520,47 @@ export class Server {
 			const signatures: Signature[] = [];
 			for (let i = 0; i < list.length(); i++) { signatures.push(signatureOf(list.at(i), shared)); }
 			done({ signatures, active: result.getDynamicField("activeSignature").asInt32(0), raw: stringify(list) });
-		}, (): void => { done(null); });
+		}, (message: string): void => { done(null); });
 	}
 
 	cancel(id: int32): void { if (id > 0) { this.client.cancel(id); } }
+
+	// The places the symbol at the offset is read or written in this document; `done` gets null
+	// when the server fails or names text no longer kept.
+	documentHighlight(doc: Document, offset: int32, done: (found: Occurrence[] | null) => void): int32 {
+		if (!this.provides("documentHighlightProvider")) { return -1; }
+		return this.request(doc, "textDocument/documentHighlight", this.at(doc, offset), (result: JsonValue, version: int32): void => {
+			const found: Occurrence[] = [];
+			for (let i = 0; i < result.length(); i++) {
+				const h = result.at(i);
+				const s = this.span(doc, version, rangeOf(h.getDynamicField("range")));
+				if (s === null) {
+					done(null);
+					return;
+				}
+				found.push({ from: (s as Span).from, to: (s as Span).to, write: h.getDynamicField("kind").asInt32(1) == WRITE_HIGHLIGHT });
+			}
+			done(found);
+		}, (message: string): void => { done(null); });
+	}
+
+	// The edits that format the document, or the range of it, offsets as the document is when
+	// they arrive; `done` gets the server's message instead when it refuses.
+	format(doc: Document, range: Span | null, done: (edits: Edit[] | null, error: string | null) => void): int32 {
+		const whole = range === null;
+		if (!this.provides(whole ? "documentFormattingProvider" : "documentRangeFormattingProvider")) { return -1; }
+		let params = `{"textDocument":{"uri":${quoted((this.sync as DocumentSync).uri)}},"options":${FORMATTING_OPTIONS}`;
+		if (range !== null) {
+			const r: Range = { start: doc.positionOf((range as Span).from), end: doc.positionOf((range as Span).to) };
+			params += `,"range":${JSON.stringify<Range>(r)}`;
+		}
+		const method = whole ? "textDocument/formatting" : "textDocument/rangeFormatting";
+		return this.request(doc, method, params + "}", (result: JsonValue, version: int32): void => {
+			const edits: Edit[] | null = present(result) ? this.edits(doc, version, result) : [];
+			if (edits === null) { done(null, "the answer names text no longer kept"); }
+			else { done(edits as Edit[], null); }
+		}, (message: string): void => { done(null, message); });
+	}
 
 	hover(doc: Document, offset: int32, done: (text: string, over: Span | null) => void): int32 {
 		if (!this.provides("hoverProvider")) { return -1; }
@@ -637,7 +681,7 @@ when (testBuild) {
 		const d = new Document(text);
 		server.initialize(null, 1, (e: string | null): void => {});
 		server.receive(reply(1, "{\"capabilities\":{\"textDocumentSync\":2,\"completionProvider\":{\"triggerCharacters\":[\".\"],\"resolveProvider\":true},"
-			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}}}"));
+			+ "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"documentFormattingProvider\":true,\"documentHighlightProvider\":true}}"));
 		server.open(d, "file:///a.ms", "metascript");
 		return [server, wire, d];
 	}
@@ -729,5 +773,40 @@ when (testBuild) {
 		const nid = server.signatureHelp(d, ask, (x: SignatureHelp | null): void => { none = x === null; });
 		server.receive(reply(nid, "null"));
 		assert none;
+	}
+
+	test "formatting sends the indent options, a range only for a selection, and gives edits or the refusal" {
+		const [server, wire, d] = completing("a  =1\n");
+		let got: Edit[] = [];
+		let error: string | null = null;
+		const id = server.format(d, null, (edits: Edit[] | null, e: string | null): void => {
+			if (edits !== null) { got = edits as Edit[]; }
+			error = e;
+		});
+		const sent = wire.sent[wire.sent.length - 1];
+		assert sent.includes("\"method\":\"textDocument/formatting\"") && sent.includes("\"tabSize\":4,\"insertSpaces\":false") && !sent.includes("\"range\"");
+		const _e = d.splice({ from: 0, to: 0, text: "x" });
+		server.receive(reply(id, "[{\"range\":{\"start\":{\"line\":0,\"character\":1},\"end\":{\"line\":0,\"character\":3}},\"newText\":\" \"}]"));
+		assert got.length == 1 && got[0].from == 2 && got[0].to == 4 && error === null;
+		const part: Span = { from: 0, to: 2 };
+		assert server.format(d, part, (edits: Edit[] | null, e: string | null): void => {}) == -1;
+		const fid = server.format(d, null, (edits: Edit[] | null, e: string | null): void => { error = e; });
+		server.receive(framed(`{"jsonrpc":"2.0","id":${fid},"error":{"code":-32603,"message":"cannot parse"}}`));
+		assert error !== null && (error as string) == "cannot parse";
+	}
+
+	test "document highlights come as read or written places, none for a null answer" {
+		const [server, wire, d] = completing("ab = ab;\n");
+		let found: Occurrence[] | null = null;
+		const id = server.documentHighlight(d, 1, (o: Occurrence[] | null): void => { found = o; });
+		assert wire.sent[wire.sent.length - 1].includes("\"method\":\"textDocument/documentHighlight\"");
+		server.receive(reply(id, "[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":2}},\"kind\":3},"
+			+ "{\"range\":{\"start\":{\"line\":0,\"character\":5},\"end\":{\"line\":0,\"character\":7}}}]"));
+		assert found !== null;
+		const f = found as Occurrence[];
+		assert f.length == 2 && f[0].write && f[0].to == 2 && !f[1].write && f[1].from == 5;
+		const nid = server.documentHighlight(d, 1, (o: Occurrence[] | null): void => { found = o; });
+		server.receive(reply(nid, "null"));
+		assert found !== null && (found as Occurrence[]).length == 0;
 	}
 }

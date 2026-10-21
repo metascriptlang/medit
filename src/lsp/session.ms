@@ -1,7 +1,8 @@
-import { Document } from "../model/document";
+import { Document, Edit } from "../model/document";
 import { Diagnostic, Diagnostics } from "../model/diagnostics";
 import { Completion } from "../model/completion";
 import { SignatureAsk, SignatureHelp } from "../model/signatures";
+import { Occurrence } from "../model/occurrences";
 import { Server, Span, Target } from "./server";
 
 export interface Link {
@@ -106,6 +107,17 @@ export class Session {
 	signatureTriggers(): string[] {
 		return this.server.triggers("signatureHelpProvider", "triggerCharacters")
 			.concat(this.server.triggers("signatureHelpProvider", "retriggerCharacters"));
+	}
+
+	format(range: [int32, int32] | null, done: (edits: Edit[] | null, error: string | null) => void): int32 {
+		if (range === null) { return this.server.format(this.doc, null, done); }
+		const [from, to] = range as [int32, int32];
+		const span: Span = { from, to };
+		return this.server.format(this.doc, span, done);
+	}
+
+	documentHighlight(offset: int32, done: (found: Occurrence[] | null) => void): int32 {
+		return this.server.documentHighlight(this.doc, offset, done);
 	}
 
 	cancel(id: int32): void { this.server.cancel(id); }
