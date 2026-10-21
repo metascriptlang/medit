@@ -30,6 +30,17 @@ export struct Location {
 	range: Range;
 }
 
+export struct Span {
+	from: int32;
+	to: int32;
+}
+
+export struct Target {
+	uri: string;
+	range: Range;
+	here: Span | null;
+}
+
 struct TextDocumentId {
 	uri: string;
 }
@@ -256,32 +267,50 @@ export class Server {
 		return JSON.stringify<PositionParams>(params);
 	}
 
-	private ask(doc: Document, method: string, params: string, done: (result: JsonValue) => void): int32 {
+	private ask(doc: Document, method: string, offset: int32, done: (result: JsonValue, version: int32) => void): int32 {
 		if (this.state != State.Ready || this.sync === null) { return -1; }
 		this.changed(doc);
-		return this.client.request(method, params, (r: Reply): void => {
-			if (!r.failed()) { done(r.result); }
+		const sync = this.sync as DocumentSync;
+		const version = sync.lspVersion();
+		return this.client.request(method, this.at(doc, offset), (r: Reply): void => {
+			if (!r.failed()) { done(r.result, version); }
 		});
+	}
+
+	private span(doc: Document, version: int32, range: Range): Span | null {
+		if (this.sync === null) { return null; }
+		const sync = this.sync as DocumentSync;
+		const from = sync.offsetAt(doc, version, range.start, Bias.Right);
+		const to = sync.offsetAt(doc, version, range.end, Bias.Left);
+		if (from === null || to === null) { return null; }
+		return { from: from as int32, to: Math.max(from as int32, to as int32) };
 	}
 
 	cancel(id: int32): void { if (id > 0) { this.client.cancel(id); } }
 
-	hover(doc: Document, offset: int32, done: (text: string, range: Range | null) => void): int32 {
+	hover(doc: Document, offset: int32, done: (text: string, over: Span | null) => void): int32 {
 		if (!this.provides("hoverProvider")) { return -1; }
-		return this.ask(doc, "textDocument/hover", this.sync === null ? "" : this.at(doc, offset), (result: JsonValue): void => {
+		return this.ask(doc, "textDocument/hover", offset, (result: JsonValue, version: int32): void => {
 			if (result.kind == JsonKind.Null) {
 				done("", null);
 				return;
 			}
 			const range = result.getDynamicField("range");
-			done(hoverText(result.getDynamicField("contents")), range.kind == JsonKind.Null ? null : rangeOf(range));
+			const text = hoverText(result.getDynamicField("contents"));
+			done(text, range.kind == JsonKind.Null ? null : this.span(doc, version, rangeOf(range)));
 		});
 	}
 
-	definition(doc: Document, offset: int32, done: (found: Location[]) => void): int32 {
+	definition(doc: Document, offset: int32, done: (found: Target[]) => void): int32 {
 		if (!this.provides("definitionProvider")) { return -1; }
-		return this.ask(doc, "textDocument/definition", this.sync === null ? "" : this.at(doc, offset), (result: JsonValue): void => {
-			done(result.kind == JsonKind.Null ? [] : locationsOf(result));
+		return this.ask(doc, "textDocument/definition", offset, (result: JsonValue, version: int32): void => {
+			const found: Target[] = [];
+			if (result.kind != JsonKind.Null) {
+				for (const l of locationsOf(result)) {
+					found.push({ uri: l.uri, range: l.range, here: l.uri == this.uri() ? this.span(doc, version, l.range) : null });
+				}
+			}
+			done(found);
 		});
 	}
 }
