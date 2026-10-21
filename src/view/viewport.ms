@@ -16,6 +16,7 @@ export struct Viewport {
 	rows: int32;
 	cols: int32;
 	pending: float64;
+	pendingCols: float64;
 }
 
 export function scrolledBy(
@@ -76,8 +77,14 @@ export function wheeled(
 }
 
 export function slid(this v: Viewport, notches: float64, widest: int32): Viewport {
-	const left = v.left + (Math.round(notches * COLS_PER_NOTCH) as int32);
-	return { ...v, left: Math.max(0, Math.min(left, widest - v.cols + 1)) };
+	return v.shifted(notches * COLS_PER_NOTCH, widest);
+}
+
+export function shifted(this v: Viewport, cols: float64, widest: int32): Viewport {
+	const total = v.pendingCols + cols;
+	const steps = total as int32;
+	const left = Math.max(0, Math.min(v.left + steps, widest - v.cols + 1));
+	return { ...v, left, pendingCols: total - steps };
 }
 
 export function resized(
@@ -126,7 +133,7 @@ export function revealedCell(this v: Viewport, cell: int32): Viewport {
 }
 
 function at(line: int32, rows: int32): Viewport {
-	return { line, sub: 0, left: 0, rows, cols: 80, pending: 0 };
+	return { line, sub: 0, left: 0, rows, cols: 80, pending: 0, pendingCols: 0 };
 }
 
 function one(line: int32): int32 { return 1; }
@@ -172,6 +179,15 @@ test "fractional notches accumulate until they reach a row" {
 	assert up.wheeled(0.2, 100, one).line == 4;
 }
 
+test "fractional columns accumulate until they reach a cell, and stop at the left edge" {
+	const once = at(0, 10).shifted(0.6, 200);
+	assert once.left == 0;
+	const twice = once.shifted(0.6, 200);
+	assert twice.left == 1;
+	assert twice.shifted(-3.5, 200).left == 0;
+	assert at(0, 10).slid(1, 200).left == 6;
+}
+
 test "shrinking the document while resized pulls the top back" {
 	assert at(50, 10).resized(20, 80, 30, one).line == 29;
 }
@@ -207,7 +223,7 @@ test "a drag scrolls only past a one-row margin, faster the farther it goes, at 
 
 test "a centered line sits in the middle row, or as low as the top allows" {
 	const one = (line: int32): int32 => 1;
-	const v: Viewport = { line: 0, sub: 0, left: 0, rows: 10, cols: 80, pending: 0 };
+	const v: Viewport = { line: 0, sub: 0, left: 0, rows: 10, cols: 80, pending: 0, pendingCols: 0 };
 	assert v.centered(50, 100, one).line == 45;
 	assert v.centered(2, 100, one).line == 0;
 	assert v.centered(99, 100, one).line == 94;
