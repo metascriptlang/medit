@@ -8,7 +8,15 @@ import { ForKeyedBy, ForList, Show } from "../../../neon/src/macros/ui/flow";
 import { TextInputHandle, View, ViewHandle, Void } from "../../../neon/src/components/primitives";
 import { Document } from "../model/document";
 import { Editor } from "../model/editor";
-import { Language, blockCommentOf, docCommentOf, languageOf, lineCommentOf } from "../model/language";
+import {
+	Language,
+	blockCommentOf,
+	docCommentOf,
+	endsWithNewlineOnSave,
+	languageOf,
+	lineCommentOf,
+	trimsOnSave,
+} from "../model/language";
 import { guessIndent } from "../model/indent";
 import { EditorConfigFile, editorConfigFor, indentFor } from "../model/editorconfig";
 import { Clip } from "../model/commands";
@@ -134,8 +142,8 @@ export function App(platform: Platform, first: string | null): NeonNode {
 		editor.docComment = docCommentOf(key);
 		const settings = editorConfigFor(platform.editorConfigs(key), key);
 		editor.indent = indentFor(settings, guessIndent(editor.doc));
-		if (settings.trimTrailingWhitespace !== null) { editor.trimOnSave = settings.trimTrailingWhitespace as boolean; }
-		if (settings.insertFinalNewline !== null) { editor.finalNewlineOnSave = settings.insertFinalNewline as boolean; }
+		editor.trimOnSave = settings.trimTrailingWhitespace ?? trimsOnSave(key);
+		editor.finalNewlineOnSave = settings.insertFinalNewline ?? endsWithNewlineOnSave(key);
 		const syntax = covers(key) && editor.doc.length() <= HIGHLIGHT_LIMIT ? new Syntax() : null;
 		const [session, note] = sessionFor(key, editor.doc, file.uri);
 		items.set(key, new Item(key, editor, syntax, session, note));
