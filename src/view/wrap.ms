@@ -1,9 +1,10 @@
 import { Bias, Document } from "../model/document";
 import { cellsBetween, offsetAtCell, prevCluster } from "../model/motion";
-import { cellsIn, clusterCellsIn, nextClusterIn } from "../text/clusters";
+import { cellsIn, clusterCellsIn, nextClusterIn, offsetAtCellIn } from "../text/clusters";
 import { Tone } from "./tone";
 import { Severity } from "../model/diagnostics";
 import { Inlay } from "../model/inlays";
+import { Fold, PLACEHOLDER, foldsWithin, shownEnd, shownLine } from "../model/folds";
 
 const TAB: int32 = 9;
 const SPACE: int32 = 32;
@@ -35,6 +36,77 @@ export struct VisualRow {
 export struct ShownCell {
 	text: int32;
 	hintAt: int32;
+	fold: boolean;
+}
+
+struct Stretch {
+	from: int32;
+	to: int32;
+	at: int32;
+}
+
+function stretches(from: int32, to: int32, hidden: Fold[]): Stretch[] {
+	const out: Stretch[] = [];
+	let here = from;
+	let at = 0;
+	for (const f of hidden) {
+		const end = Math.max(here, Math.min(f.from, to));
+		out.push({ from: here, to: end, at });
+		at += end - here;
+		here = Math.max(here, Math.min(f.to, to));
+	}
+	out.push({ from: here, to: Math.max(here, to), at });
+	return out;
+}
+
+function seenText(doc: Document, ss: Stretch[]): string {
+	let text = "";
+	for (const s of ss) { text += doc.slice(s.from, s.to); }
+	return text;
+}
+
+function docAt(ss: Stretch[], local: int32, right: boolean): int32 {
+	const last = (ss.length as int32) - 1;
+	for (let k = 0; k < last; k++) {
+		const s = ss[k];
+		const end = s.at + s.to - s.from;
+		if (local < end || (local == end && !right)) { return s.from + local - s.at; }
+	}
+	return ss[last].from + local - ss[last].at;
+}
+
+function seenCells(doc: Document, from: int32, to: int32, cell: int32, hidden: Fold[]): int32 {
+	if (hidden.length == 0) { return cellsBetween(doc, from, to, cell); }
+	const bytes = seenText(doc, stretches(from, to, hidden)).asBytes();
+	return cellsIn(bytes, 0, bytes.length as int32, cell);
+}
+
+function foldedBetween(folds: Fold[], from: int32, to: int32): int32 {
+	let bytes = 0;
+	for (const f of foldsWithin(folds, from, to)) { bytes += Math.min(f.to, to) - Math.max(f.from, from); }
+	return bytes;
+}
+
+function placed(inlays: Inlay[], hidden: Fold[]): Inlay[] {
+	if (hidden.length == 0) { return inlays; }
+	const out: Inlay[] = [];
+	const count = inlays.length as int32;
+	let k = 0;
+	for (const f of hidden) {
+		while (k < count && inlays[k].at <= f.from) { out.push(inlays[k]); k++; }
+		out.push({ at: f.from, text: PLACEHOLDER, bias: Bias.Right });
+		while (k < count && inlays[k].at < f.to) { k++; }
+	}
+	while (k < count) { out.push(inlays[k]); k++; }
+	return out;
+}
+
+function isPlaceholder(i: Inlay, hidden: Fold[]): boolean {
+	if (i.text != PLACEHOLDER) { return false; }
+	for (const f of hidden) {
+		if (f.from == i.at) { return true; }
+	}
+	return false;
 }
 
 function inlayCells(i: Inlay): int32 {
@@ -52,14 +124,26 @@ function shows(this r: VisualRow, i: Inlay): boolean {
 	return i.at >= r.from && (i.at < r.to || (r.last && i.at == r.to));
 }
 
-export function rowsOf(doc: Document, line: int32, width: int32, inlays: Inlay[] = []): Vec<VisualRow> {
+export function rowsOf(
+	doc: Document,
+	asked: int32,
+	width: int32,
+	lineInlays: Inlay[] = [],
+	folds: Fold[] = [],
+): Vec<VisualRow> {
+	const line = folds.length == 0 ? asked : doc.shownLine(folds, asked);
 	const start = doc.lineStart(line);
+	const stop = folds.length == 0 ? doc.lineEnd(line) : doc.shownEnd(folds, line);
 	let rows: Vec<VisualRow> = [];
 	if (width <= 0) {
-		rows.push({ line, from: start, to: doc.lineEnd(line), cell: 0, last: true });
+		rows.push({ line, from: start, to: stop, cell: 0, last: true });
 		return rows;
 	}
-	const text = doc.line(line);
+	const hidden = foldsWithin(folds, start, stop);
+	const plain = hidden.length == 0;
+	const ss = plain ? [] : stretches(start, stop, hidden);
+	const inlays = placed(lineInlays, hidden);
+	const text = plain ? doc.line(line) : seenText(doc, ss);
 	const bytes = text.asBytes();
 	const end = bytes.length as int32;
 	const count = inlays.length as int32;
@@ -76,7 +160,7 @@ export function rowsOf(doc: Document, line: int32, width: int32, inlays: Inlay[]
 	while (at < end) {
 		let hinted = 0;
 		let past = k;
-		while (past < count && inlays[past].at <= start + at) {
+		while (past < count && inlays[past].at <= (plain ? start + at : docAt(ss, at, true))) {
 			hinted += inlayCells(inlays[past]);
 			past++;
 		}
@@ -84,7 +168,13 @@ export function rowsOf(doc: Document, line: int32, width: int32, inlays: Inlay[]
 		if (shown + hinted + cells - rowShown > width && at > from) {
 			const soft = breakAt > from;
 			const cut = soft ? breakAt : at;
-			rows.push({ line, from: start + from, to: start + cut, cell: rowCell, last: false });
+			rows.push({
+				line,
+				from: plain ? start + from : docAt(ss, from, false),
+				to: plain ? start + cut : docAt(ss, cut, false),
+				cell: rowCell,
+				last: false,
+			});
 			from = cut;
 			rowCell = soft ? breakCell : cell;
 			rowShown = soft ? breakShown : shown;
@@ -102,7 +192,7 @@ export function rowsOf(doc: Document, line: int32, width: int32, inlays: Inlay[]
 			breakShown = shown;
 		}
 	}
-	rows.push({ line, from: start + from, to: start + end, cell: rowCell, last: true });
+	rows.push({ line, from: plain ? start + from : docAt(ss, from, false), to: stop, cell: rowCell, last: true });
 	return rows;
 }
 
@@ -117,41 +207,61 @@ export function holds(this r: VisualRow, offset: int32): boolean {
 	return offset >= r.from && (offset < r.to || (r.last && offset == r.to));
 }
 
-export function cellIn(doc: Document, r: VisualRow, offset: int32, inlays: Inlay[] = []): int32 {
+export function cellIn(doc: Document, r: VisualRow, offset: int32, lineInlays: Inlay[] = [], folds: Fold[] = []): int32 {
+	const hidden = foldsWithin(folds, r.from, r.to);
+	const inlays = placed(lineInlays, hidden);
 	let hinted = 0;
 	for (let k = firstInlay(inlays, r.from); k < (inlays.length as int32) && inlays[k].at <= offset; k++) {
 		const i = inlays[k];
 		if (r.shows(i) && (i.at < offset || i.bias == Bias.Left)) { hinted += inlayCells(i); }
 	}
-	return cellsBetween(doc, r.from, offset, r.cell) + hinted;
+	return seenCells(doc, r.from, offset, r.cell, hidden) + hinted;
 }
 
-export function rowCells(doc: Document, r: VisualRow, inlays: Inlay[] = []): int32 {
+export function rowCells(doc: Document, r: VisualRow, lineInlays: Inlay[] = [], folds: Fold[] = []): int32 {
+	const hidden = foldsWithin(folds, r.from, r.to);
+	const inlays = placed(lineInlays, hidden);
 	let hinted = 0;
 	for (let k = firstInlay(inlays, r.from); k < (inlays.length as int32) && inlays[k].at <= r.to; k++) {
 		if (r.shows(inlays[k])) { hinted += inlayCells(inlays[k]); }
 	}
-	return cellsBetween(doc, r.from, r.to, r.cell) + hinted;
+	return seenCells(doc, r.from, r.to, r.cell, hidden) + hinted;
 }
 
-export function shownCellIn(doc: Document, r: VisualRow, cell: int32, inlays: Inlay[] = []): ShownCell {
+export function shownCellIn(
+	doc: Document,
+	r: VisualRow,
+	cell: int32,
+	lineInlays: Inlay[] = [],
+	folds: Fold[] = [],
+): ShownCell {
+	const hidden = foldsWithin(folds, r.from, r.to);
+	const inlays = placed(lineInlays, hidden);
 	let hinted = 0;
 	for (let k = firstInlay(inlays, r.from); k < (inlays.length as int32) && inlays[k].at <= r.to; k++) {
 		const i = inlays[k];
 		if (!r.shows(i)) { continue; }
-		const left = cellsBetween(doc, r.from, i.at, r.cell) + hinted;
+		const left = seenCells(doc, r.from, i.at, r.cell, hidden) + hinted;
 		const width = inlayCells(i);
 		if (cell < left) { break; }
-		if (cell < left + width) { return { text: cell - hinted, hintAt: i.at }; }
+		if (cell < left + width) { return { text: cell - hinted, hintAt: i.at, fold: isPlaceholder(i, hidden) }; }
 		hinted += width;
 	}
-	return { text: cell - hinted, hintAt: -1 };
+	return { text: cell - hinted, hintAt: -1, fold: false };
 }
 
-export function offsetIn(doc: Document, r: VisualRow, cell: int32, inlays: Inlay[] = []): int32 {
-	const shown = shownCellIn(doc, r, cell, inlays);
+export function textOffsetIn(doc: Document, r: VisualRow, cell: int32, folds: Fold[] = []): int32 {
+	const hidden = foldsWithin(folds, r.from, r.to);
+	if (hidden.length == 0) { return offsetAtCell(doc, r.from, r.to, r.cell, cell); }
+	const ss = stretches(r.from, r.to, hidden);
+	const bytes = seenText(doc, ss).asBytes();
+	return docAt(ss, offsetAtCellIn(bytes, 0, bytes.length as int32, r.cell, cell), true);
+}
+
+export function offsetIn(doc: Document, r: VisualRow, cell: int32, inlays: Inlay[] = [], folds: Fold[] = []): int32 {
+	const shown = shownCellIn(doc, r, cell, inlays, folds);
 	if (shown.hintAt >= 0) { return shown.hintAt; }
-	const at = offsetAtCell(doc, r.from, r.to, r.cell, shown.text);
+	const at = textOffsetIn(doc, r, shown.text, folds);
 	return !r.last && at == r.to ? prevCluster(doc, r.to) : at;
 }
 
@@ -191,14 +301,20 @@ export function rowPieces(
 	tones: Readonly<Span<Tone>>,
 	base: int32,
 	marks: Mark[],
-	inlays: Inlay[] = [],
+	lineInlays: Inlay[] = [],
+	folds: Fold[] = [],
 ): Vec<Piece> {
 	let pieces: Vec<Piece> = [];
 	let out: uint8[] = [];
 	let tone = Tone.Plain;
 	let faded = false;
 	let underline: Severity | null = null;
-	const text = doc.slice(r.from, r.to);
+	const hidden = foldsWithin(folds, r.from, r.to);
+	const plain = hidden.length == 0;
+	const ss = plain ? [] : stretches(r.from, r.to, hidden);
+	const inlays = placed(lineInlays, hidden);
+	const toneBase = r.from - base - (folds.length == 0 ? 0 : foldedBetween(folds, base, r.from));
+	const text = plain ? doc.slice(r.from, r.to) : seenText(doc, ss);
 	const bytes = text.asBytes();
 	const end = bytes.length as int32;
 	const first = r.cell + left;
@@ -209,7 +325,7 @@ export function rowPieces(
 	let cell = r.cell;
 	let shift = 0;
 	while (at <= end && cell + shift < limit) {
-		while (h < count && inlays[h].at <= r.from + at && (at < end || r.last)) {
+		while (h < count && inlays[h].at <= (plain ? r.from + at : docAt(ss, at, true)) && (at < end || r.last)) {
 			const width = inlayCells(inlays[h]);
 			const x = cell + shift;
 			if (x + width > first && x < limit) {
@@ -228,8 +344,8 @@ export function rowPieces(
 		const cells = clusterCellsIn(bytes, at, cell);
 		const next = nextClusterIn(bytes, at);
 		if (x + cells > first) {
-			const here = toneAt(tones, r.from + at - base);
-			const mark = marks.length == 0 ? null : markAt(marks, r.from + at);
+			const here = toneAt(tones, toneBase + at);
+			const mark = marks.length == 0 ? null : markAt(marks, plain ? r.from + at : docAt(ss, at, true));
 			const dim = mark !== null && (mark as Mark).faded;
 			const line = mark === null ? null : (mark as Mark).underline;
 			if ((here != tone || dim != faded || line != underline) && out.length > 0) {
@@ -397,4 +513,50 @@ test "hints draw as their own pieces, clipped to the columns shown" {
 	assert text == "f(a: 1, b: 2): T" && hinted == "[a: ][b: ][: T]" && all.length == 6;
 	const clipped = rowPieces(d, r, 3, 5, [], 0, [], hints);
 	assert clipped.length == 2 && clipped[0].text == ": " && clipped[0].hint && clipped[1].text == "1, " && !clipped[1].hint;
+}
+
+function seen(doc: Document, rows: Readonly<Span<VisualRow>>, folds: Fold[]): string {
+	const parts: string[] = [];
+	for (const r of rows) {
+		let text = "";
+		for (const p of rowPieces(doc, r, 0, 40, [], 0, [], [], folds)) { text += p.text; }
+		parts.push(text);
+	}
+	return parts.join("|");
+}
+
+test "a folded block shows as its first line, a placeholder and the rest of its closing line" {
+	const d = new Document("if (x) {\n  a;\n  b;\n}\nc");
+	const folds: Fold[] = [{ from: 8, to: 19 }];
+	const rows = rowsOf(d, 2, 0, [], folds);
+	assert rows.length == 1 && rows[0].line == 0 && rows[0].from == 0 && rows[0].to == 20;
+	assert seen(d, rows, folds) == "if (x) {⋯}";
+	assert seen(d, rowsOf(d, 0, 9, [], folds), folds) == "if (x) |{⋯}";
+	assert seen(d, rowsOf(d, 4, 9, [], folds), folds) == "c";
+}
+
+test "the caret sits before the placeholder at the fold's start and after it at the fold's end" {
+	const d = new Document("if (x) {\n  a;\n  b;\n}\nc");
+	const folds: Fold[] = [{ from: 8, to: 19 }];
+	const r = rowsOf(d, 0, 0, [], folds)[0];
+	assert cellIn(d, r, 8, [], folds) == 8 && cellIn(d, r, 19, [], folds) == 9 && rowCells(d, r, [], folds) == 10;
+	const placeholder = shownCellIn(d, r, 8, [], folds);
+	assert placeholder.hintAt == 8 && placeholder.fold && !shownCellIn(d, r, 9, [], folds).fold;
+	assert offsetIn(d, r, 8, [], folds) == 8 && offsetIn(d, r, 9, [], folds) == 19 && offsetIn(d, r, 30, [], folds) == 20;
+	assert textOffsetIn(d, r, 8, folds) == 19 && textOffsetIn(d, r, 3, folds) == 3;
+}
+
+test "tones index the bytes left shown, and hints inside a fold are dropped" {
+	const d = new Document("if (x) {\n  a;\n  b;\n}\nc");
+	const folds: Fold[] = [{ from: 8, to: 19 }];
+	const tones: Tone[] = [];
+	for (let k = 0; k < 11; k++) { tones.push(k == 8 || k == 10 ? Tone.Keyword : Tone.Plain); }
+	const close = rowPieces(d, rowsOf(d, 0, 0, [], folds)[0], 0, 40, tones, 0, [], [], folds);
+	assert close[close.length - 1].text == "}" && close[close.length - 1].tone == Tone.Keyword;
+	const c = rowPieces(d, rowsOf(d, 4, 0, [], folds)[0], 0, 40, tones, 0, [], [], folds);
+	assert c[0].text == "c" && c[0].tone == Tone.Keyword;
+	const hints = [hint(12, ": T", Bias.Right), hint(20, "!", Bias.Right)];
+	let text = "";
+	for (const p of rowPieces(d, rowsOf(d, 0, 0, hints, folds)[0], 0, 40, [], 0, [], hints, folds)) { text += p.text; }
+	assert text == "if (x) {⋯}!";
 }

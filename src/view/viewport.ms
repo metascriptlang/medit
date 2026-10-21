@@ -5,6 +5,9 @@ const DRAG_SCROLL_EASE: float64 = 1.2;
 const DRAG_SCROLL_PX_PER_ROW: float64 = 100;
 
 export type RowCount = (line: int32) => int32;
+export type LineSpan = (line: int32) => [int32, int32];
+
+function whole(line: int32): [int32, int32] { return [line, line]; }
 
 export struct Viewport {
 	line: int32;
@@ -20,18 +23,21 @@ export function scrolledBy(
 	delta: int32,
 	lineCount: int32,
 	rowsIn: RowCount,
+	spanOf: LineSpan = whole,
 ): Viewport {
 	const last = Math.max(0, lineCount - 1);
-	let line = Math.min(v.line, last);
+	let line = spanOf(Math.min(v.line, last))[0];
 	let sub = v.sub + delta;
 	while (sub < 0 && line > 0) {
-		line -= 1;
+		line = spanOf(line - 1)[0];
 		sub += rowsIn(line);
 	}
 	let here = rowsIn(line);
-	while (sub >= here && line < last) {
+	while (sub >= here) {
+		const below = spanOf(line)[1] + 1;
+		if (below > last) { break; }
 		sub -= here;
-		line += 1;
+		line = below;
 		here = rowsIn(line);
 	}
 	return { ...v, line, sub: Math.max(0, Math.min(sub, here - 1)) };
@@ -42,10 +48,11 @@ export function nudged(
 	rows: float64,
 	lineCount: int32,
 	rowsIn: RowCount,
+	spanOf: LineSpan = whole,
 ): Viewport {
 	const total = v.pending + rows;
-	const whole = total as int32;
-	return { ...v.scrolledBy(whole, lineCount, rowsIn), pending: total - whole };
+	const steps = total as int32;
+	return { ...v.scrolledBy(steps, lineCount, rowsIn, spanOf), pending: total - steps };
 }
 
 export function dragScrollRows(y: float64, height: float64, rowHeight: float64): float64 {
@@ -63,8 +70,9 @@ export function wheeled(
 	notches: float64,
 	lineCount: int32,
 	rowsIn: RowCount,
+	spanOf: LineSpan = whole,
 ): Viewport {
-	return v.nudged(-notches * ROWS_PER_NOTCH, lineCount, rowsIn);
+	return v.nudged(-notches * ROWS_PER_NOTCH, lineCount, rowsIn, spanOf);
 }
 
 export function slid(this v: Viewport, notches: float64, widest: int32): Viewport {
@@ -78,9 +86,10 @@ export function resized(
 	cols: int32,
 	lineCount: int32,
 	rowsIn: RowCount,
+	spanOf: LineSpan = whole,
 ): Viewport {
 	const sized: Viewport = { ...v, rows: Math.max(1, rows), cols: Math.max(1, cols) };
-	return sized.scrolledBy(0, lineCount, rowsIn);
+	return sized.scrolledBy(0, lineCount, rowsIn, spanOf);
 }
 
 export function revealed(
@@ -89,13 +98,14 @@ export function revealed(
 	sub: int32,
 	lineCount: int32,
 	rowsIn: RowCount,
+	spanOf: LineSpan = whole,
 ): Viewport {
 	const target: Viewport = { ...v, line, sub };
 	if (line < v.line || (line == v.line && sub < v.sub)) { return target; }
 	let seen = -v.sub;
-	for (let above = v.line; above < line && seen < v.rows; above++) { seen += rowsIn(above); }
+	for (let above = v.line; above < line && seen < v.rows; above = spanOf(above)[1] + 1) { seen += rowsIn(above); }
 	if (seen + sub < v.rows) { return v; }
-	return target.scrolledBy(1 - v.rows, lineCount, rowsIn);
+	return target.scrolledBy(1 - v.rows, lineCount, rowsIn, spanOf);
 }
 
 export function centered(
@@ -103,9 +113,10 @@ export function centered(
 	line: int32,
 	lineCount: int32,
 	rowsIn: RowCount,
+	spanOf: LineSpan = whole,
 ): Viewport {
 	const target: Viewport = { ...v, line, sub: 0, pending: 0 };
-	return target.scrolledBy(-(v.rows / 2), lineCount, rowsIn);
+	return target.scrolledBy(-(v.rows / 2), lineCount, rowsIn, spanOf);
 }
 
 export function revealedCell(this v: Viewport, cell: int32): Viewport {
@@ -200,4 +211,16 @@ test "a centered line sits in the middle row, or as low as the top allows" {
 	assert v.centered(50, 100, one).line == 45;
 	assert v.centered(2, 100, one).line == 0;
 	assert v.centered(99, 100, one).line == 94;
+}
+
+test "scrolling and revealing step over the lines a fold joins into one" {
+	const joined = (line: int32): [int32, int32] => line >= 3 && line <= 7 ? [3, 7] : [line, line];
+	assert at(2, 4).scrolledBy(1, 100, one, joined).line == 3;
+	assert at(3, 4).scrolledBy(1, 100, one, joined).line == 8;
+	assert at(8, 4).scrolledBy(-1, 100, one, joined).line == 3;
+	assert at(5, 4).scrolledBy(0, 100, one, joined).line == 3;
+	assert at(0, 5).revealed(8, 0, 100, one, joined).line == 0;
+	assert at(0, 4).revealed(8, 0, 100, one, joined).line == 1;
+	assert at(0, 4).revealed(9, 0, 100, one, joined).line == 2;
+	assert at(0, 4).scrolledBy(50, 8, one, joined).line == 3;
 }
