@@ -1,6 +1,6 @@
 import { Rope } from "../text/rope";
-import { Document } from "../model/document";
-import { Range, positionIn } from "./position";
+import { Bias, Document, mapOffset } from "../model/document";
+import { Position, Range, offsetIn, offsetOf, positionIn } from "./position";
 
 export enum SyncKind {
 	None = 0,
@@ -116,6 +116,14 @@ export class DocumentSync {
 		return JSON.stringify<DidChangeRanges>(ranged);
 	}
 
+	offsetNow(doc: Document, p: Position, bias: Bias): int32 {
+		const logged = doc.changesSince(this.sentAt);
+		if (logged === null) { return doc.offsetOf(p); }
+		let offset = offsetIn(this.shadow, p);
+		for (const c of logged) { offset = mapOffset(offset, c.change, bias); }
+		return offset;
+	}
+
 	saved(doc: Document, includeText: boolean): string {
 		const id: DocumentId = { uri: this.uri };
 		if (includeText) {
@@ -194,6 +202,16 @@ when (testBuild) {
 		const ranged = sync.changed(d, SyncKind.Incremental);
 		assert ranged !== null;
 		if (ranged !== null) { assert ranged.includes("\"range\":{\"start\":{\"line\":0,\"character\":0}"); }
+	}
+
+	test "a position the server sent maps through edits made since" {
+		const d = new Document("ab\ncd");
+		const sync = new DocumentSync("file:///a.ms", "metascript", d);
+		const _o = sync.opened(d);
+		const _a = d.splice({ from: 0, to: 0, text: "zz\n" });
+		assert sync.offsetNow(d, { line: 1, character: 1 }, Bias.Right) == 7;
+		const _p = sync.changed(d, SyncKind.Incremental);
+		assert sync.offsetNow(d, { line: 1, character: 1 }, Bias.Right) == 4;
 	}
 
 	test "save and close name the document" {
