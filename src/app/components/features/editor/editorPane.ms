@@ -31,14 +31,14 @@ import { Inlay, InlayHints } from "../../../../model/inlays";
 import { Outline, OutlineItem } from "../../../../model/outline";
 import { NavHistory, Spot } from "../../../../model/history";
 import { Expander } from "../../../../model/expand";
+import { Fold, Folds, Toggle, lineHidden, shownEnd, shownLine } from "../../../../model/folds";
 import { KeyPress, Outcome, completionKeymap, defaultKeymap, listKeymap, signatureKeymap } from "../../../../input/keymap";
 import { Viewport, centered, dragScrollRows } from "../../../../view/viewport";
-import { VisualRow, cellIn, offsetIn, rowCells, rowIndexOf, rowsOf, shownCellIn } from "../../../../view/wrap";
+import { VisualRow, cellIn, offsetIn, rowCells, rowIndexOf, rowsOf, shownCellIn, textOffsetIn } from "../../../../view/wrap";
 import { Syntax, covers } from "../../../../syntax/syntax";
 import { Bias, Document, Edit } from "../../../../model/document";
 import { Tone } from "../../../../view/tone";
 import { Diagnostic } from "../../../../model/diagnostics";
-import { offsetAtCell } from "../../../../model/motion";
 import { Session } from "../../../../lsp/session";
 import { Span, Target } from "../../../../lsp/server";
 import { filePath } from "../../../../lsp/uri";
@@ -53,12 +53,14 @@ import { GoToBar } from "../goto/goToBar";
 import { RenameField } from "../rename/renameField";
 import { referenceColumns, referenceRows } from "../references/referenceList";
 import { actionColumns, actionRows } from "../actions/actionList";
-import { OUTLINE_PADDING, OUTLINE_ROWS, OutlinePicker, outlineColumns, outlineRows } from "../outline/outlinePicker";
+import { outlineColumns, outlineRows } from "../outline/outlinePicker";
+import { PICKER_PADDING, PICKER_ROWS, Picker } from "../../ui/picker";
+import { paletteColumns, paletteOf, paletteRows } from "../palette/palettePicker";
 import { HoverCard, cardOf, cardSize, placed } from "../hover/hoverCard";
 import { CompletionMenu, MENU_BORDER, MENU_ROWS, menuColumns, menuPlaced, menuRows, scrolledTop } from "../completion/completionMenu";
 import { signatureCard, signaturePlaced } from "../signature/signatureCard";
 import { createBlink } from "./blink";
-import { Grid, framed, gutterWidth, painted } from "./paint";
+import { Grid, framed, gutterWidth, painted, toggleCell } from "./paint";
 
 const PROBE = "MMMMMMMMMM";
 const MULTI_CLICK_MS: float64 = 400;
@@ -144,6 +146,14 @@ export function EditorPane(props: {
 	let outlineHead = -1;
 	let placeOutline: () => void = (): void => {};
 	let outlineChanged: () => void = (): void => {};
+	const [paletted, setPaletted] = createSignal<boolean>(false);
+	const [paletteQuery, setPaletteQuery] = createSignal<string>("");
+	const [paletteBox, setPaletteBox] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const [palettePick, setPalettePick] = createSignal<Box>({ x: 0, y: 0, width: 0, height: 0, color: "" });
+	const paletteLines: List<Row> = createList<Row>([]);
+	let paletteTop = 0;
+	let placePalette: () => void = (): void => {};
+	let paletteChanged: () => void = (): void => {};
 	let listing: () => boolean = (): boolean => false;
 	let goingFrom: Viewport | null = null;
 	let goText = "";
@@ -217,20 +227,36 @@ export function EditorPane(props: {
 		notice = message;
 		hintsChanged();
 	}, (): void => { hintsChanged(); });
-	const lineHints = (line: int32): Inlay[] => hints.within(doc.lineStart(line), doc.lineEnd(line));
+	const folds = new Folds(syntax === null ? null : (syntax as Syntax).ancestors(doc));
+	let overGutter = false;
+	const folded = (): Fold[] => folds.shown(doc);
+	const spanOf = (line: int32): [int32, int32] => {
+		const fs = folded();
+		if (fs.length == 0) { return [line, line]; }
+		const first = doc.shownLine(fs, line);
+		return [first, doc.lineOf(doc.shownEnd(fs, first))];
+	};
+	const lineHints = (line: int32): Inlay[] => {
+		const fs = folded();
+		const first = doc.shownLine(fs, line);
+		return hints.within(doc.lineStart(first), doc.shownEnd(fs, first));
+	};
+	const toggleOf = (line: int32): Toggle =>
+		folds.toggleAt(doc, line, overGutter || line == doc.shownLine(folded(), doc.lineOf(editor.selections.primaryRange().head)));
 
 	const wrapWidth = (): int32 => wrap ? view.cols : 0;
-	const lineRowsOf = (line: int32): Vec<VisualRow> => rowsOf(doc, line, wrapWidth(), wrap ? lineHints(line) : []);
+	const lineRowsOf = (line: int32): Vec<VisualRow> => rowsOf(doc, line, wrapWidth(), wrap ? lineHints(line) : [], folded());
 	const rowsIn = (line: int32): int32 => lineRowsOf(line).length as int32;
 
 	const frameUp = (): void => {
-		frame = framed(doc, view, wrapWidth(), lineHints);
+		if (doc.lineHidden(folded(), view.line)) { view = { ...view, line: doc.shownLine(folded(), view.line), sub: 0 }; }
+		frame = framed(doc, view, wrapWidth(), lineHints, folded());
 		frameHints = frame.length == 0 ? [] : hints.within(frame[0].from, frame[frame.length - 1].to);
 	};
 
 	const fit = (): void => {
 		const cols = columns - gutterWidth(doc.lineCount());
-		if (view.cols != cols) { view = view.resized(view.rows, cols, doc.lineCount(), rowsIn); }
+		if (view.cols != cols) { view = view.resized(view.rows, cols, doc.lineCount(), rowsIn, spanOf); }
 	};
 
 	const marked = (): Sel[] => {
@@ -238,8 +264,14 @@ export function EditorPane(props: {
 		if (q === null || frame.length == 0) { return []; }
 		const n = (q as Query).text.byteLength;
 		const to = Math.min(doc.length(), frame[frame.length - 1].to + n);
-		return doc.matchesIn(q as Query, frame[0].from, to)
-			.map((at: int32): Sel => span(at, at + n));
+		let found: int32[] = [];
+		let from = frame[0].from;
+		for (const f of folded()) {
+			if (f.to <= from || f.from >= to) { continue; }
+			found = found.concat(doc.matchesIn(q as Query, from, f.from));
+			from = f.to;
+		}
+		return found.concat(doc.matchesIn(q as Query, from, to)).map((at: int32): Sel => span(at, at + n));
 	};
 
 	const bracketed = (): Sel[] => {
@@ -331,7 +363,7 @@ export function EditorPane(props: {
 		}
 		const total = completer.choices.length as int32;
 		const columns = menuColumns(completer.items, completer.choices);
-		const cell = Math.max(0, cellIn(doc, frame[row], word, frameHints) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[row], word, frameHints, folded()) - view.left);
 		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
 		const place = menuPlaced(columns, Math.min(total, MENU_ROWS), x, row, view.rows, grid.rowHeight, grid.cellWidth, areaWidth, PANEL);
 		menuTop = scrolledTop(menuTop, completer.selected, place.rows, total);
@@ -360,7 +392,7 @@ export function EditorPane(props: {
 			return;
 		}
 		const card = signatureCard(help as SignatureHelp, signer.current, extension, columns, view.rows, highlight);
-		const cell = Math.max(0, cellIn(doc, frame[row], head, frameHints) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[row], head, frameHints, folded()) - view.left);
 		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
 		const menu = menued() ? menuBox() : null;
 		setSignBox(signaturePlaced(card, x, row * grid.rowHeight, grid.rowHeight, grid.cellWidth, areaWidth, areaHeight, menu));
@@ -383,7 +415,7 @@ export function EditorPane(props: {
 		frameUp();
 		if (frame.length > 0) { hints.visible(frame[0].from, frame[frame.length - 1].to); }
 		const shownOccurrences = frame.length == 0 ? [] : occurrences.within(frame[0].from, frame[frame.length - 1].to);
-		const p = painted(doc, editor.selections, marked(), bracketed(), shownOccurrences, frame, view, syntax, visibleDiagnostics(), grid, frameHints);
+		const p = painted(doc, editor.selections, marked(), bracketed(), shownOccurrences, frame, view, syntax, visibleDiagnostics(), grid, frameHints, folded(), toggleOf);
 		fill(rows, p.rows);
 		fill(shades, p.shades);
 		fill(carets, p.carets);
@@ -394,17 +426,19 @@ export function EditorPane(props: {
 		placeRename();
 		placeReferences();
 		placeOutline();
+		placePalette();
 		report();
 	};
 
 	const reveal = (): void => {
 		fit();
+		const _opened = folds.reveal(editor);
 		const head = editor.selections.primaryRange().head;
-		const line = doc.lineOf(head);
+		const line = doc.shownLine(folded(), doc.lineOf(head));
 		const lineRows = lineRowsOf(line);
 		const k = rowIndexOf(lineRows, head);
-		view = view.revealed(line, k, doc.lineCount(), rowsIn);
-		if (!wrap) { view = view.revealedCell(cellIn(doc, lineRows[k], head, lineHints(line))); }
+		view = view.revealed(line, k, doc.lineCount(), rowsIn, spanOf);
+		if (!wrap) { view = view.revealedCell(cellIn(doc, lineRows[k], head, lineHints(line), folded())); }
 		paint();
 	};
 
@@ -437,7 +471,7 @@ export function EditorPane(props: {
 			if (carded()) { setCarded(false); }
 			return;
 		}
-		const cell = Math.max(0, cellIn(doc, frame[i], anchor, frameHints) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[i], anchor, frameHints, folded()) - view.left);
 		const x = gutterWidth(doc.lineCount()) * grid.cellWidth + cell * grid.cellWidth;
 		setCardBox(placed(card, x, i * grid.rowHeight, grid.rowHeight, grid.cellWidth, areaWidth));
 		fill(cardRows, card.rows);
@@ -467,9 +501,9 @@ export function EditorPane(props: {
 		const x = e.locationX - gutterWidth(doc.lineCount()) * grid.cellWidth;
 		if (i >= (frame.length as int32) || x < 0) { return -1; }
 		const r = frame[i];
-		const shown = shownCellIn(doc, r, view.left + (Math.floor(x / grid.cellWidth) as int32), frameHints);
+		const shown = shownCellIn(doc, r, view.left + (Math.floor(x / grid.cellWidth) as int32), frameHints, folded());
 		if (shown.hintAt >= 0) { return -1; }
-		const at = doc.offsetAtCell(r.from, r.to, r.cell, shown.text);
+		const at = textOffsetIn(doc, r, shown.text, folded());
 		return at >= r.to ? -1 : at;
 	};
 
@@ -481,6 +515,11 @@ export function EditorPane(props: {
 	const overCard = (e: NeonEvent): boolean => carded() && inside(cardBox(), e);
 
 	const hovered = (e: NeonEvent): void => {
+		const gutterNow = e.locationX >= 0 && e.locationX < gutterWidth(doc.lineCount()) * grid.cellWidth;
+		if (gutterNow != overGutter) {
+			overGutter = gutterNow;
+			paint();
+		}
 		if (overCard(e) || overMenu(e)) { return; }
 		const at = offsetUnder(e);
 		if (cardOver !== null && at >= (cardOver as Span).from && at < (cardOver as Span).to) { return; }
@@ -604,7 +643,7 @@ export function EditorPane(props: {
 		const total = actions.shown() ? offered.length as int32 : places.length as int32;
 		const selected = actions.shown() ? actions.selected : references.selected;
 		const columns = actions.shown() ? actionColumns(offered) : referenceColumns(doc, places);
-		const cell = actions.shown() ? Math.max(0, cellIn(doc, frame[row], head, frameHints) - view.left) : 0;
+		const cell = actions.shown() ? Math.max(0, cellIn(doc, frame[row], head, frameHints, folded()) - view.left) : 0;
 		const x = (gutterWidth(doc.lineCount()) + cell) * grid.cellWidth;
 		const place = menuPlaced(columns, Math.min(total, MENU_ROWS), x, row, view.rows, grid.rowHeight, grid.cellWidth, areaWidth, PANEL);
 		listTop = scrolledTop(listTop, selected, place.rows, total);
@@ -644,17 +683,17 @@ export function EditorPane(props: {
 			outlineHead = head;
 			outlineTop = 0;
 		}
-		view = head == outlineHead ? outlineFrom as Viewport : view.centered(doc.lineOf(head), doc.lineCount(), rowsIn);
+		view = head == outlineHead ? outlineFrom as Viewport : view.centered(doc.lineOf(head), doc.lineCount(), rowsIn, spanOf);
 		paint();
 	};
 	placeOutline = (): void => {
 		if (!outline.shown() || grid.cellWidth <= 0) { return; }
 		const total = outline.rows().length as int32;
 		const columns = outlineColumns(outline);
-		const count = Math.max(1, Math.min(OUTLINE_ROWS, view.rows - 3));
+		const count = Math.max(1, Math.min(PICKER_ROWS, view.rows - 3));
 		outlineTop = scrolledTop(outlineTop, outline.selected, count, total);
 		fill(outlineLines, outlineRows(outline, outlineTop, count, columns));
-		const width = columns * grid.cellWidth + 2 * OUTLINE_PADDING;
+		const width = columns * grid.cellWidth + 2 * PICKER_PADDING;
 		setOutlinePick({
 			x: 0,
 			y: (outline.selected - outlineTop) * grid.rowHeight,
@@ -667,7 +706,8 @@ export function EditorPane(props: {
 	};
 	const outlineConfirmed = (): void => {
 		outline.confirm();
-		view = view.centered(doc.lineOf(editor.selections.primaryRange().head), doc.lineCount(), rowsIn);
+		const _opened = folds.reveal(editor);
+		view = view.centered(doc.lineOf(editor.selections.primaryRange().head), doc.lineCount(), rowsIn, spanOf);
 		paint();
 		focus();
 	};
@@ -675,6 +715,33 @@ export function EditorPane(props: {
 		if (outlineFrom !== null) { view = outlineFrom as Viewport; }
 		outline.dismiss();
 		focus();
+	};
+	const palette = paletteOf(table, keymap, [menuKeys, listKeys, signKeysSeveral], (): void => { paletteChanged(); });
+	paletteChanged = (): void => {
+		if (palette.shown()) {
+			placePalette();
+		} else if (paletted()) {
+			setPaletteQuery("");
+			setPaletted(false);
+		}
+	};
+	placePalette = (): void => {
+		if (!palette.shown() || grid.cellWidth <= 0) { return; }
+		const total = palette.rows().length as int32;
+		const columns = paletteColumns(palette);
+		const count = Math.max(1, Math.min(PICKER_ROWS, view.rows - 3));
+		paletteTop = scrolledTop(paletteTop, palette.selected, count, total);
+		fill(paletteLines, paletteRows(palette, paletteTop, count, columns));
+		const width = columns * grid.cellWidth + 2 * PICKER_PADDING;
+		setPalettePick({
+			x: 0,
+			y: (palette.selected - paletteTop) * grid.rowHeight,
+			width: columns * grid.cellWidth,
+			height: total == 0 ? 0 : grid.rowHeight,
+			color: SELECTION,
+		});
+		setPaletteBox({ x: Math.max(0, (areaWidth - width) / 2), y: 0, width, height: Math.min(total, count) * grid.rowHeight, color: PANEL });
+		if (!paletted()) { setPaletted(true); }
 	};
 	placeRename = (): void => {
 		const at = renamer.renaming();
@@ -685,7 +752,7 @@ export function EditorPane(props: {
 			if (frame[k].holds(from)) { row = k; }
 		}
 		if (row < 0) { return; }
-		const cell = Math.max(0, cellIn(doc, frame[row], from, frameHints) - view.left);
+		const cell = Math.max(0, cellIn(doc, frame[row], from, frameHints, folded()) - view.left);
 		const width = Math.min(areaWidth, RENAME_COLUMNS * grid.cellWidth);
 		const x = Math.max(0, Math.min((gutterWidth(doc.lineCount()) + cell) * grid.cellWidth, areaWidth - width));
 		setRenameBox({ x, y: (row + 1) * grid.rowHeight, width, height: 0, color: "" });
@@ -707,7 +774,7 @@ export function EditorPane(props: {
 	const cx: Context = {
 		pageRows: (): int32 => Math.max(1, view.rows - 1),
 		scrollRows: (rows: int32): void => {
-			view = view.scrolledBy(rows, doc.lineCount(), rowsIn);
+			view = view.scrolledBy(rows, doc.lineCount(), rowsIn, spanOf);
 			scrolledOnly = true;
 			hideCard();
 			signer.dismiss();
@@ -820,6 +887,13 @@ export function EditorPane(props: {
 			actions.close();
 			outline.open();
 		},
+		palette: (): void => {
+			completer.hide();
+			references.close();
+			actions.close();
+			outline.close();
+			palette.open();
+		},
 		navigate: (back: boolean): void => {
 			const here: Spot = { at: editor.selections.primaryRange().head, top: view.line };
 			const to = back ? history.back(here) : history.onward(here);
@@ -837,6 +911,7 @@ export function EditorPane(props: {
 			paint();
 		},
 		expander: new Expander(syntax === null ? null : (syntax as Syntax).ancestors(doc)),
+		folds,
 	};
 
 	const layout = (e: NeonEvent): void => {
@@ -861,7 +936,7 @@ export function EditorPane(props: {
 		const heightPx = PixelRatio.getPixelSizeForLayoutSize(e.height);
 		view = { ...view, rows: Math.max(1, Math.floor(heightPx / rowPx) as int32) };
 		fit();
-		view = view.resized(view.rows, view.cols, doc.lineCount(), rowsIn);
+		view = view.resized(view.rows, view.cols, doc.lineCount(), rowsIn, spanOf);
 		paint();
 	};
 
@@ -945,7 +1020,23 @@ export function EditorPane(props: {
 		}
 		const textX = gutterWidth(doc.lineCount()) * grid.cellWidth;
 		const cell = Math.round((Math.max(0, e.locationX) - textX) / grid.cellWidth) as int32;
-		return offsetIn(doc, frame[Math.min(i, (frame.length as int32) - 1)], view.left + Math.max(0, cell), frameHints);
+		return offsetIn(doc, frame[Math.min(i, (frame.length as int32) - 1)], view.left + Math.max(0, cell), frameHints, folded());
+	};
+
+	const foldClicked = (e: NeonEvent): boolean => {
+		const i = Math.floor(Math.max(0, e.locationY) / grid.rowHeight) as int32;
+		if (i >= (frame.length as int32) || e.shiftKey || e.altKey) { return false; }
+		const r = frame[i];
+		const cell = Math.floor(Math.max(0, e.locationX) / grid.cellWidth) as int32;
+		const gutter = gutterWidth(doc.lineCount());
+		if (cell < gutter) {
+			if (cell < toggleCell(doc.lineCount()) || r.cell != 0) { return false; }
+			const toggle = folds.toggleAt(doc, r.line, true);
+			if (toggle == Toggle.Folded) { return folds.unfoldLine(doc, r.line); }
+			return toggle == Toggle.Open && folds.foldLine(editor, r.line);
+		}
+		const shown = shownCellIn(doc, r, view.left + cell - gutter, frameHints, folded());
+		return shown.fold && folds.unfoldShown(doc, shown.hintAt);
 	};
 
 	const pressed = (e: NeonEvent): void => {
@@ -953,6 +1044,7 @@ export function EditorPane(props: {
 		if (renamed()) { renamer.cancel(); }
 		references.close();
 		outline.close();
+		palette.close();
 		if (actions.shown() && listed() && e.button == 1 && inside(listBox(), e)) {
 			actions.pick(listTop + (Math.floor((e.locationY - listBox().y - MENU_BORDER) / grid.rowHeight) as int32));
 			return;
@@ -965,6 +1057,10 @@ export function EditorPane(props: {
 			return;
 		}
 		completer.hide();
+		if (foldClicked(e)) {
+			paint();
+			return;
+		}
 		const offset = offsetAt(e);
 		const now = Date.now();
 		clicks = now - lastPress < MULTI_CLICK_MS && offset == lastOffset ? clicks % 3 + 1 : 1;
@@ -984,7 +1080,7 @@ export function EditorPane(props: {
 		if (gesture === null) { return; }
 		const rows = dragScrollRows(e.locationY, areaHeight, grid.rowHeight);
 		if (rows != 0) {
-			view = view.nudged(rows, doc.lineCount(), rowsIn);
+			view = view.nudged(rows, doc.lineCount(), rowsIn, spanOf);
 			frameUp();
 		}
 		drag(editor, gesture as Gesture, offsetAt(e));
@@ -1005,7 +1101,7 @@ export function EditorPane(props: {
 		goText = text;
 		setLineQuery(text);
 		const t = goTarget();
-		if (t !== null) { view = view.centered(doc.targetLine(t as LineTarget), doc.lineCount(), rowsIn); }
+		if (t !== null) { view = view.centered(doc.targetLine(t as LineTarget), doc.lineCount(), rowsIn, spanOf); }
 		paint();
 	};
 
@@ -1015,7 +1111,8 @@ export function EditorPane(props: {
 		if (t !== null) {
 			const at = doc.targetOffset(t as LineTarget);
 			editor.select(single(at));
-			view = view.centered(doc.lineOf(at), doc.lineCount(), rowsIn);
+			const _opened = folds.reveal(editor);
+			view = view.centered(doc.lineOf(at), doc.lineCount(), rowsIn, spanOf);
 		}
 		reveal();
 	};
@@ -1028,7 +1125,7 @@ export function EditorPane(props: {
 
 	const widest = (): int32 => {
 		let most = 0;
-		for (const r of frame) { most = Math.max(most, rowCells(doc, r, frameHints)); }
+		for (const r of frame) { most = Math.max(most, rowCells(doc, r, frameHints, folded())); }
 		return most;
 	};
 
@@ -1036,7 +1133,7 @@ export function EditorPane(props: {
 		const sideways = e.deltaX != 0 ? e.deltaX : e.shiftKey ? -e.deltaY : 0;
 		const next = sideways != 0
 			? (wrap ? view : view.slid(sideways, widest()))
-			: view.wheeled(e.deltaY, doc.lineCount(), rowsIn);
+			: view.wheeled(e.deltaY, doc.lineCount(), rowsIn, spanOf);
 		const moved = next.line != view.line || next.sub != view.sub || next.left != view.left;
 		view = next;
 		if (moved) {
@@ -1140,7 +1237,8 @@ export function EditorPane(props: {
 			confirmed={goConfirmed}
 			cancelled={goCancelled}
 		/>
-		<OutlinePicker
+		<Picker
+			placeholder="symbol"
 			shown={outlined()}
 			box={outlineBox()}
 			selected={outlinePick()}
@@ -1156,6 +1254,31 @@ export function EditorPane(props: {
 			moved={(m: MenuMove): void => { outline.move(m); }}
 			confirmed={outlineConfirmed}
 			cancelled={outlineCancelled}
+		/>
+		<Picker
+			placeholder="command"
+			shown={paletted()}
+			box={paletteBox()}
+			selected={palettePick()}
+			rows={paletteLines}
+			query={paletteQuery()}
+			cellWidth={drawn().cellWidth}
+			rowHeight={drawn().rowHeight}
+			attach={(input: TextInputHandle): void => { input.focus(); }}
+			changed={(text: string): void => {
+				setPaletteQuery(text);
+				palette.search(text);
+			}}
+			moved={(m: MenuMove): void => { palette.move(m); }}
+			confirmed={(): void => {
+				const name = palette.confirm();
+				focus();
+				if (name !== null) { run(name as string); }
+			}}
+			cancelled={(): void => {
+				palette.close();
+				focus();
+			}}
 		/>
 		<RenameField
 			shown={renamed()}
