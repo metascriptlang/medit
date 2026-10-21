@@ -53,6 +53,9 @@ const LANGUAGES: Array<[Language, string[]]> = [
 	[{ id: "lua", server: "lua-language-server" }, ["lua"]],
 ];
 
+const KEEP_TRAILING_WHITESPACE = ["md", "mdx", "markdown", "diff", "patch"];
+const KEEP_LAST_LINE = ["diff", "patch"];
+
 function typeOf(path: string): string | null {
 	const dot = path.lastIndexOf(".");
 	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
@@ -93,6 +96,23 @@ export function docCommentOf(path: string): DocComment | null {
 		if (types.includes(type as string)) { return shape; }
 	}
 	return null;
+}
+
+export function trimsOnSave(path: string): boolean {
+	const type = typeOf(path);
+	return type === null || !KEEP_TRAILING_WHITESPACE.includes(type as string);
+}
+
+export function endsWithNewlineOnSave(path: string): boolean {
+	const type = typeOf(path);
+	return type === null || !KEEP_LAST_LINE.includes(type as string);
+}
+
+test "a save keeps the trailing spaces of markdown and diffs, and the last line of diffs" {
+	assert trimsOnSave("a/b.ms") && endsWithNewlineOnSave("a/b.ms");
+	assert trimsOnSave("Makefile") && endsWithNewlineOnSave("Makefile");
+	assert !trimsOnSave("README.md") && endsWithNewlineOnSave("README.md");
+	assert !trimsOnSave("fix.patch") && !endsWithNewlineOnSave("fix.patch");
 }
 
 test "a doc comment opens with two stars in script types, one in C-like types, and some types have none" {
