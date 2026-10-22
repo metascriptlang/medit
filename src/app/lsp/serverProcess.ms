@@ -74,4 +74,18 @@ when (testBuild) {
 	test "a command that cannot start is null" {
 		assert ServerProcess.start("no-such-server-medic", "") === null;
 	}
+
+	when (!windows) {
+		test "a quoted argument reaches the program as one word" {
+			const started = ServerProcess.start("/bin/sh -c \"exit 3\"", "");
+			assert started !== null;
+			if (started !== null) {
+				const until = performance.now() + 5000;
+				let code = started.exitCode();
+				while (code === null && performance.now() < until) { code = started.exitCode(); }
+				assert code === 3;
+				started.stop();
+			}
+		}
+	}
 }

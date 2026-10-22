@@ -12,6 +12,7 @@
 #include "serverProcess.h"
 
 #define SERVER_MAX 8
+#define ARG_MAX_WORDS 64
 
 extern char** environ;
 
@@ -123,6 +124,25 @@ static void* writeLoop(void* arg) {
 	return NULL;
 }
 
+static int splitCommand(const char* line, char* words, char** argv, int most) {
+	int count = 0;
+	while (*line) {
+		while (*line == ' ' || *line == '\t') line++;
+		if (!*line) break;
+		if (count == most - 1) return -1;
+		argv[count++] = words;
+		int quoted = 0;
+		while (*line && (quoted || (*line != ' ' && *line != '\t'))) {
+			if (*line == '"') quoted = !quoted;
+			else *words++ = *line;
+			line++;
+		}
+		*words++ = '\0';
+	}
+	argv[count] = NULL;
+	return count;
+}
+
 int serverOpen(const char* commandLine, const char* cwd) {
 	int id = -1;
 	for (int i = 0; i < SERVER_MAX; i++) {
@@ -148,9 +168,13 @@ int serverOpen(const char* commandLine, const char* cwd) {
 	posix_spawn_file_actions_addclose(&actions, in[0]);
 	posix_spawn_file_actions_addclose(&actions, out[1]);
 	if (cwd[0] != '\0') posix_spawn_file_actions_addchdir_np(&actions, cwd);
-	char* argv[] = { "/bin/sh", "-c", (char*)commandLine, NULL };
+	char* words = malloc(strlen(commandLine) + 1);
+	char* argv[ARG_MAX_WORDS];
 	pid_t pid = 0;
-	int spawned = posix_spawn(&pid, "/bin/sh", &actions, NULL, argv, environ);
+	int spawned = words && splitCommand(commandLine, words, argv, ARG_MAX_WORDS) > 0
+		? posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ)
+		: -1;
+	free(words);
 	posix_spawn_file_actions_destroy(&actions);
 	close(in[0]);
 	close(out[1]);
