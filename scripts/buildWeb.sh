@@ -42,8 +42,17 @@ if [ "$active" != "$EMSCRIPTEN_VERSION" ]; then
 	exit 1
 fi
 
+relativeTo() {
+	base="$1"; target="$2"; up=""
+	while [ "${target#"$base"/}" = "$target" ]; do
+		[ "$base" = "/" ] && { echo "$target"; return; }
+		base="$(dirname "$base")"; up="../$up"
+	done
+	echo "$up${target#"$base"/}"
+}
+
 cd "$ROOT"
-VOID_FONT="$(realpath --relative-to="$ROOT" "$VOID/assets/font.ttf")"
+VOID_FONT="$(relativeTo "$ROOT" "$VOID/assets/font.ttf")"
 PRELOAD="--preload-file assets/JetBrainsMonoNL-Regular.ttf --preload-file $VOID_FONT@assets/font.ttf"
 
 build() {
