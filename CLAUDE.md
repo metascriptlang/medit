@@ -67,7 +67,7 @@ usual.
 
 Run from the repository root: fonts are loaded by relative path.
 
-- Desktop (Ion window, Windows): `msc build src/app/medic.ms --output=out/medic.exe`, then
+- Desktop (Ion window, Windows and macOS): `msc build src/app/medic.ms --output=out/medic.exe`, then
   `out/medic.exe <file or folder>`. A folder is the project and opens with no tab; a file's project
   is the nearest folder above it holding `.git`, else its own folder. ctrl+p lists the project's
   files: git's tracked and untracked ones, else a walk. Add `--release` to open large files: building the document of a 100 MB
@@ -90,6 +90,17 @@ Run from the repository root: fonts are loaded by relative path.
   `index.html?lsp=...&file=<path under dir>` opens and saves that file through the bridge, so the
   server reads it and its imports from disk; without `&file=` the page opens with no tab and ctrl+p
   lists the files under `<dir>`, which ctrl+shift+f searches. The bridge answers pages served from this machine only.
+- iPad, iPhone and Android: `project.ms` describes both apps for Ion, which writes the Xcode
+  and the Gradle project into one directory: install Ion with
+  `msc install -g "@metascript/ion@file:../ion"`, then `ion generate project.ms <out>` (it pins the
+  `msc` named by `MSC`, else the one on `PATH`). iOS: `xcodebuild -project <out>/Medic.xcodeproj
+  -target Medic -sdk iphoneos -allowProvisioningUpdates build`, then `xcrun devicectl device install
+  app --device <id> <app>`; the device needs Developer Mode. Android: `cd <out> && ./gradlew
+  assembleDebug`, then `adb install -r app/build/outputs/apk/debug/app-debug.apk`. The iOS project
+  is the app's `Documents`, shared with the Files app; the Android project is the app's files
+  directory, the working directory Void's driver sets. An APK asset has no path, so the Android
+  entry reads its font with `readResource` and hands Neon the bytes; on Android `runCanvas`
+  returns while the activity runs, so nothing may exit after it.
 - Drive the web build headless: `node scripts/webDrive.mjs <url> <outDir> <step>...` (steps in its
   header; `hold:ctrl` keeps a modifier down across the steps that follow, as the ctrl+tab switcher
   needs). CDP `insertText` outside a composition is dropped by void's web input; type with `type:`.
