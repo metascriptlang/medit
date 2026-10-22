@@ -1,6 +1,3 @@
-// Parked: std/process fails the C build for iOS,
-// ~/metascript/.inbox/compiler/2026-10-21-std-process-does-not-compile-for-ios.md
-
 import { NeonNode } from "../../../neon/src/render/node";
 import { runCanvas, CanvasOptions, canvasOptions } from "../../../neon/src/platform/sokol/canvas";
 import { join } from "std/fs/path";
